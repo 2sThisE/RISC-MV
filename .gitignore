@@ -1,0 +1,22 @@
+# Build outputs
+/build/
+*.exe
+*.dll
+*.o
+*.obj
+*.pdb
+
+# Generated disk images and runtime data
+*.img
+*.log
+
+# Benchmark outputs generated beside their sources
+/examples/bench_*.bin
+/examples/bench_*.lst
+/examples/bench_*.sym
+
+# Editor and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

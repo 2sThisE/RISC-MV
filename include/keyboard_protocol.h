@@ -1,0 +1,121 @@
+#ifndef KEYBOARD_PROTOCOL_H
+#define KEYBOARD_PROTOCOL_H
+
+#include <stdint.h>
+
+#define VM_KEYBOARD_MMIO_SIZE UINT64_C(0x40)
+
+#define VM_KEYBOARD_CONTROL_OFFSET    UINT64_C(0x00)
+#define VM_KEYBOARD_STATUS_OFFSET     UINT64_C(0x08)
+#define VM_KEYBOARD_EVENT_COUNT_OFFSET UINT64_C(0x10)
+#define VM_KEYBOARD_EVENT_DATA_OFFSET UINT64_C(0x18)
+#define VM_KEYBOARD_CAPACITY_OFFSET   UINT64_C(0x20)
+#define VM_KEYBOARD_IRQ_STATUS_OFFSET UINT64_C(0x28)
+#define VM_KEYBOARD_DROPPED_OFFSET    UINT64_C(0x30)
+#define VM_KEYBOARD_VERSION_OFFSET    UINT64_C(0x38)
+
+#define VM_KEYBOARD_CONTROL_ENABLE     (UINT64_C(1) << 0)
+#define VM_KEYBOARD_CONTROL_IRQ_ENABLE (UINT64_C(1) << 1)
+
+#define VM_KEYBOARD_STATUS_EVENT_AVAILABLE (UINT64_C(1) << 0)
+#define VM_KEYBOARD_STATUS_OVERFLOW        (UINT64_C(1) << 1)
+
+#define VM_KEYBOARD_IRQ_EVENT    (UINT64_C(1) << 0)
+#define VM_KEYBOARD_IRQ_OVERFLOW (UINT64_C(1) << 1)
+
+#define VM_KEYBOARD_EVENT_USAGE_MASK UINT64_C(0xFFFF)
+#define VM_KEYBOARD_EVENT_DOWN        (UINT64_C(1) << 16)
+#define VM_KEYBOARD_EVENT_REPEAT      (UINT64_C(1) << 17)
+#define VM_KEYBOARD_EVENT_EXTENDED    (UINT64_C(1) << 18)
+#define VM_KEYBOARD_EVENT_MODIFIERS_SHIFT 24U
+#define VM_KEYBOARD_EVENT_MODIFIERS_MASK  (UINT64_C(0xFF) << 24)
+#define VM_KEYBOARD_EVENT_SEQUENCE_SHIFT  32U
+#define VM_KEYBOARD_EVENT_SEQUENCE_MASK   (UINT64_C(0xFFFFFFFF) << 32)
+
+#define VM_KEYBOARD_MOD_LEFT_CTRL   (UINT8_C(1) << 0)
+#define VM_KEYBOARD_MOD_LEFT_SHIFT  (UINT8_C(1) << 1)
+#define VM_KEYBOARD_MOD_LEFT_ALT    (UINT8_C(1) << 2)
+#define VM_KEYBOARD_MOD_LEFT_GUI    (UINT8_C(1) << 3)
+#define VM_KEYBOARD_MOD_RIGHT_CTRL  (UINT8_C(1) << 4)
+#define VM_KEYBOARD_MOD_RIGHT_SHIFT (UINT8_C(1) << 5)
+#define VM_KEYBOARD_MOD_RIGHT_ALT   (UINT8_C(1) << 6)
+#define VM_KEYBOARD_MOD_RIGHT_GUI   (UINT8_C(1) << 7)
+
+#define VM_KEYBOARD_QUEUE_CAPACITY 256U
+#define VM_KEYBOARD_PROTOCOL_VERSION UINT64_C(1)
+
+typedef enum {
+    VM_KEY_NONE = 0x00,
+    VM_KEY_A = 0x04,
+    VM_KEY_1 = 0x1E,
+    VM_KEY_0 = 0x27,
+    VM_KEY_ENTER = 0x28,
+    VM_KEY_ESCAPE = 0x29,
+    VM_KEY_BACKSPACE = 0x2A,
+    VM_KEY_TAB = 0x2B,
+    VM_KEY_SPACE = 0x2C,
+    VM_KEY_MINUS = 0x2D,
+    VM_KEY_EQUAL = 0x2E,
+    VM_KEY_LEFT_BRACKET = 0x2F,
+    VM_KEY_RIGHT_BRACKET = 0x30,
+    VM_KEY_BACKSLASH = 0x31,
+    VM_KEY_SEMICOLON = 0x33,
+    VM_KEY_APOSTROPHE = 0x34,
+    VM_KEY_GRAVE = 0x35,
+    VM_KEY_COMMA = 0x36,
+    VM_KEY_PERIOD = 0x37,
+    VM_KEY_SLASH = 0x38,
+    VM_KEY_CAPS_LOCK = 0x39,
+    VM_KEY_F1 = 0x3A,
+    VM_KEY_F12 = 0x45,
+    VM_KEY_PRINT_SCREEN = 0x46,
+    VM_KEY_SCROLL_LOCK = 0x47,
+    VM_KEY_PAUSE = 0x48,
+    VM_KEY_INSERT = 0x49,
+    VM_KEY_HOME = 0x4A,
+    VM_KEY_PAGE_UP = 0x4B,
+    VM_KEY_DELETE = 0x4C,
+    VM_KEY_END = 0x4D,
+    VM_KEY_PAGE_DOWN = 0x4E,
+    VM_KEY_RIGHT = 0x4F,
+    VM_KEY_LEFT = 0x50,
+    VM_KEY_DOWN = 0x51,
+    VM_KEY_UP = 0x52,
+    VM_KEY_NUM_LOCK = 0x53,
+    VM_KEY_KEYPAD_DIVIDE = 0x54,
+    VM_KEY_KEYPAD_MULTIPLY = 0x55,
+    VM_KEY_KEYPAD_SUBTRACT = 0x56,
+    VM_KEY_KEYPAD_ADD = 0x57,
+    VM_KEY_KEYPAD_ENTER = 0x58,
+    VM_KEY_KEYPAD_1 = 0x59,
+    VM_KEY_KEYPAD_0 = 0x62,
+    VM_KEY_KEYPAD_DECIMAL = 0x63,
+    VM_KEY_APPLICATION = 0x65,
+    VM_KEY_F13 = 0x68,
+    VM_KEY_F24 = 0x73,
+    VM_KEY_LANG1 = 0x90,
+    VM_KEY_LANG2 = 0x91,
+    VM_KEY_LEFT_CTRL = 0xE0,
+    VM_KEY_LEFT_SHIFT = 0xE1,
+    VM_KEY_LEFT_ALT = 0xE2,
+    VM_KEY_LEFT_GUI = 0xE3,
+    VM_KEY_RIGHT_CTRL = 0xE4,
+    VM_KEY_RIGHT_SHIFT = 0xE5,
+    VM_KEY_RIGHT_ALT = 0xE6,
+    VM_KEY_RIGHT_GUI = 0xE7
+} VmKeyboardUsage;
+
+static inline uint64_t vm_keyboard_event_make(uint16_t usage,
+                                              int down,
+                                              int repeat,
+                                              int extended,
+                                              uint8_t modifiers)
+{
+    return (uint64_t)usage |
+           (down ? VM_KEYBOARD_EVENT_DOWN : 0) |
+           (repeat ? VM_KEYBOARD_EVENT_REPEAT : 0) |
+           (extended ? VM_KEYBOARD_EVENT_EXTENDED : 0) |
+           ((uint64_t)modifiers << VM_KEYBOARD_EVENT_MODIFIERS_SHIFT);
+}
+
+#endif

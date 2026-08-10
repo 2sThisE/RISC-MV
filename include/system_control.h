@@ -1,0 +1,59 @@
+#ifndef SYSTEM_CONTROL_H
+#define SYSTEM_CONTROL_H
+
+#include <stdint.h>
+
+#include "bus.h"
+
+#define SYSTEM_CONTROL_MMIO_BASE UINT64_C(0xFFFFFFFFFFFC2000)
+#define SYSTEM_CONTROL_MMIO_SIZE UINT64_C(0x40)
+
+#define SYSTEM_CONTROL_MAGIC UINT64_C(0x4C525443)
+#define SYSTEM_CONTROL_VERSION UINT64_C(1)
+
+#define SYSTEM_CONTROL_MAGIC_OFFSET       UINT64_C(0x00)
+#define SYSTEM_CONTROL_VERSION_OFFSET     UINT64_C(0x08)
+#define SYSTEM_CONTROL_FEATURES_OFFSET    UINT64_C(0x10)
+#define SYSTEM_CONTROL_COMMAND_OFFSET     UINT64_C(0x18)
+#define SYSTEM_CONTROL_STATUS_OFFSET      UINT64_C(0x20)
+#define SYSTEM_CONTROL_RESULT_OFFSET      UINT64_C(0x28)
+#define SYSTEM_CONTROL_RESET_CAUSE_OFFSET UINT64_C(0x30)
+#define SYSTEM_CONTROL_RESET_COUNT_OFFSET UINT64_C(0x38)
+
+#define SYSTEM_CONTROL_FEATURE_SHUTDOWN   (UINT64_C(1) << 0)
+#define SYSTEM_CONTROL_FEATURE_WARM_RESET (UINT64_C(1) << 1)
+
+#define SYSTEM_CONTROL_COMMAND_NONE       UINT64_C(0)
+#define SYSTEM_CONTROL_COMMAND_SHUTDOWN   UINT64_C(1)
+#define SYSTEM_CONTROL_COMMAND_WARM_RESET UINT64_C(2)
+#define SYSTEM_CONTROL_COMMAND_REBOOT SYSTEM_CONTROL_COMMAND_WARM_RESET
+
+#define SYSTEM_CONTROL_STATUS_RUNNING          UINT64_C(0)
+#define SYSTEM_CONTROL_STATUS_SHUTDOWN_PENDING UINT64_C(1)
+#define SYSTEM_CONTROL_STATUS_RESET_PENDING    UINT64_C(2)
+
+#define SYSTEM_CONTROL_RESULT_NONE            UINT64_C(0)
+#define SYSTEM_CONTROL_RESULT_ACCEPTED        UINT64_C(1)
+#define SYSTEM_CONTROL_RESULT_BUSY            UINT64_C(2)
+#define SYSTEM_CONTROL_RESULT_INVALID_COMMAND UINT64_C(3)
+
+#define SYSTEM_CONTROL_RESET_CAUSE_POWER_ON UINT64_C(0)
+#define SYSTEM_CONTROL_RESET_CAUSE_SOFTWARE UINT64_C(1)
+
+struct VirtualMachine;
+
+typedef struct {
+    struct VirtualMachine *vm;
+    uint64_t last_command;
+    uint64_t status;
+    uint64_t last_result;
+    uint64_t reset_cause;
+    uint64_t reset_count;
+    int warm_reset_pending;
+} SystemControlDevice;
+
+int system_control_device_init(SystemControlDevice *device,
+                               struct VirtualMachine *vm);
+BusDevice system_control_device_as_bus_device(SystemControlDevice *device);
+
+#endif

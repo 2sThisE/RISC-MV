@@ -1,0 +1,38 @@
+; UART CONTROL 활성화
+MOVI64 R0, 0xFFFFFFFFFFFD0018
+MOVI64 R1, 1
+STORE64 R0, R1
+
+; UART TXDATA 주소
+MOVI64 R0, 0xFFFFFFFFFFFD0000
+
+; 현재 숫자 = 1
+MOVI64 R2, 1
+
+loop:
+    ; 숫자를 ASCII 문자로 변환
+    MOV R3, R2
+    ADDI32 R3, 48
+
+    ; UART 출력
+    STORE8 R0, R3
+
+    ; 공백 출력
+    MOVI64 R3, 32
+    STORE8 R0, R3
+
+    ; 숫자 증가
+    ADDI32 R2, 1
+
+    ; R2가 11보다 작은 동안 반복
+    CMPI32 R2, 11
+    JLT loop
+
+; 줄바꿈
+MOVI64 R3, 13
+STORE8 R0, R3
+
+MOVI64 R3, 10
+STORE8 R0, R3
+
+HALT
