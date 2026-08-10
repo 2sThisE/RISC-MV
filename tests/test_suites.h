@@ -11,9 +11,11 @@
     X("bus_timer", test_bus_timer)               \
     X("core_control", test_core_control)         \
     X("device_manager", test_device_manager)     \
+    X("disk_image", test_disk_image)             \
     X("display", test_display)                   \
     X("display_queue", test_display_queue)       \
     X("exception", test_exception)               \
+    X("firmware", test_firmware)                 \
     X("interrupt", test_interrupt)               \
     X("irq_controller", test_irq_controller)     \
     X("ipi", test_ipi)                           \
@@ -23,6 +25,7 @@
     X("main_options", test_main_options)         \
     X("mmu", test_mmu)                           \
     X("multicore", test_multicore)               \
+    X("object_assembler", test_object_assembler) \
     X("privilege", test_privilege)               \
     X("stack", test_stack)                       \
     X("syscall", test_syscall)                   \

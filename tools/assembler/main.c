@@ -1,4 +1,7 @@
 #include "assembler.h"
+#include "object_assembler.h"
+#include "object_format.h"
+#include "preprocessor.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -6,13 +9,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_SOURCE_SIZE ((size_t)16 * 1024 * 1024)
-
 static void print_usage(const char *program)
 {
     fprintf(stderr,
-            "Usage: %s INPUT.asm -o OUTPUT.bin [--base ADDRESS] "
+            "Usage:\n"
+            "  %s INPUT.s -c -o OUTPUT.o\n"
+            "  %s INPUT.asm -o OUTPUT.bin [--base ADDRESS] "
             "[--symbols FILE] [--listing FILE]\n",
+            program,
             program);
 }
 
@@ -33,48 +37,11 @@ static int parse_address(const char *text, uint64_t *value)
 
 static char *read_source(const char *path)
 {
-    FILE *file = fopen(path, "rb");
-    if (file == NULL) {
-        fprintf(stderr, "vmasm: cannot open input '%s'\n", path);
-        return NULL;
-    }
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fprintf(stderr, "vmasm: cannot measure input '%s'\n", path);
-        fclose(file);
-        return NULL;
-    }
-    long measured = ftell(file);
-    if (measured < 0 || (unsigned long)measured > MAX_SOURCE_SIZE) {
-        fprintf(stderr,
-                "vmasm: input must be no larger than %zu bytes\n",
-                MAX_SOURCE_SIZE);
-        fclose(file);
-        return NULL;
-    }
-    if (fseek(file, 0, SEEK_SET) != 0) {
-        fprintf(stderr, "vmasm: cannot rewind input '%s'\n", path);
-        fclose(file);
-        return NULL;
-    }
-
-    size_t size = (size_t)measured;
-    char *source = malloc(size + 1);
-    if (source == NULL) {
-        fputs("vmasm: cannot allocate source buffer\n", stderr);
-        fclose(file);
-        return NULL;
-    }
-    if (size != 0 && fread(source, 1, size, file) != size) {
-        fprintf(stderr, "vmasm: cannot read input '%s'\n", path);
-        free(source);
-        fclose(file);
-        return NULL;
-    }
-    source[size] = '\0';
-    if (fclose(file) != 0) {
-        fprintf(stderr, "vmasm: cannot close input '%s'\n", path);
-        free(source);
-        return NULL;
+    char *source = NULL;
+    AssemblyError error;
+    if (!asm_preprocess_file(path, &source, &error)) {
+        fprintf(stderr, "%s:%zu:%zu: error: %s\n", path, error.line,
+                error.column, error.message);
     }
     return source;
 }
@@ -170,16 +137,21 @@ int main(int argc, char **argv)
     const char *symbol_path = NULL;
     const char *listing_path = NULL;
     uint64_t base_address = 1;
+    int object_mode = 0;
+    int base_specified = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_path = argv[++i];
+        } else if (strcmp(argv[i], "-c") == 0) {
+            object_mode = 1;
         } else if (strcmp(argv[i], "--base") == 0 && i + 1 < argc) {
             if (!parse_address(argv[++i], &base_address)) {
                 fputs("vmasm: --base requires a valid nonnegative address\n",
                       stderr);
                 return 2;
             }
+            base_specified = 1;
         } else if (strcmp(argv[i], "--symbols") == 0 && i + 1 < argc) {
             symbol_path = argv[++i];
         } else if (strcmp(argv[i], "--listing") == 0 && i + 1 < argc) {
@@ -195,10 +167,39 @@ int main(int argc, char **argv)
         print_usage(argv[0]);
         return 2;
     }
+    if (object_mode && (base_specified || symbol_path != NULL ||
+                        listing_path != NULL)) {
+        fputs("vmasm: -c cannot be combined with --base, --symbols, or "
+              "--listing\n", stderr);
+        return 2;
+    }
 
     char *source = read_source(input_path);
     if (source == NULL) {
         return 1;
+    }
+    if (object_mode) {
+        CvmObjectFile object;
+        AssemblyError error;
+        if (!assembler_assemble_object(source, &object, &error)) {
+            fprintf(stderr, "%s:%zu:%zu: error: %s\n", input_path,
+                    error.line, error.column, error.message);
+            free(source);
+            return 1;
+        }
+        free(source);
+        char object_error[160];
+        int okay = cvm_object_write(output_path, &object, object_error,
+                                    sizeof(object_error));
+        if (!okay) {
+            fprintf(stderr, "vmasm: %s: %s\n", output_path, object_error);
+        } else {
+            printf("Assembled relocatable object: %zu sections, %zu symbols "
+                   "-> %s\n", object.section_count, object.symbol_count,
+                   output_path);
+        }
+        cvm_object_destroy(&object);
+        return okay ? 0 : 1;
     }
     AssemblyResult result;
     AssemblyError error;

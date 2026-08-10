@@ -108,6 +108,26 @@ static void test_directive_layout(void)
     assembly_result_destroy(&result);
 }
 
+static void test_equ_and_expression_precedence(void)
+{
+    static const char source[] =
+        ".equ VALUE, 2 + 3 * 4\n"
+        ".set MASK, (1 << 5) | 3\n"
+        ".qword VALUE, MASK, ~0 & 0xFF, 17 / 4, 17 % 4\n";
+    AssemblyResult result;
+    AssemblyError error;
+    assert(assembler_assemble(source, 0, &result, &error));
+    assert(result.size == 40);
+    const uint64_t expected[] = {14, 35, 255, 4, 1};
+    for (size_t item = 0; item < 5; ++item) {
+        uint64_t value = 0;
+        for (size_t byte = 0; byte < 8; ++byte)
+            value |= (uint64_t)result.data[item * 8 + byte] << (byte * 8);
+        assert(value == expected[item]);
+    }
+    assembly_result_destroy(&result);
+}
+
 static void expect_assembly_failure(const char *source)
 {
     AssemblyResult result;
@@ -126,12 +146,15 @@ static void test_diagnostics(void)
     expect_assembly_failure("SHL R0, 64\n");
     expect_assembly_failure(".ascii \"\\x1\"\n");
     expect_assembly_failure("MOVI32U R16, 1\n");
+    expect_assembly_failure(".qword 1 / 0\n");
+    expect_assembly_failure(".qword 1 << 64\n");
 }
 
 int test_assembler(void)
 {
     test_assembled_program_executes();
     test_directive_layout();
+    test_equ_and_expression_precedence();
     test_diagnostics();
     return 0;
 }

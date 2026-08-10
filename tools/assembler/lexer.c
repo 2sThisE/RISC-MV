@@ -271,6 +271,29 @@ int asm_lex_line(const char *line,
                 case ',': token.type = ASM_TOKEN_COMMA; break;
                 case '+': token.type = ASM_TOKEN_PLUS; break;
                 case '-': token.type = ASM_TOKEN_MINUS; break;
+                case '*': token.type = ASM_TOKEN_STAR; break;
+                case '/': token.type = ASM_TOKEN_SLASH; break;
+                case '%': token.type = ASM_TOKEN_PERCENT; break;
+                case '&': token.type = ASM_TOKEN_AMPERSAND; break;
+                case '|': token.type = ASM_TOKEN_PIPE; break;
+                case '^': token.type = ASM_TOKEN_CARET; break;
+                case '~': token.type = ASM_TOKEN_TILDE; break;
+                case '<':
+                    if (line[cursor] != '<') {
+                        return lexer_error(error, line_number, token.column,
+                                           "expected '<<'");
+                    }
+                    ++cursor;
+                    token.type = ASM_TOKEN_SHIFT_LEFT;
+                    break;
+                case '>':
+                    if (line[cursor] != '>') {
+                        return lexer_error(error, line_number, token.column,
+                                           "expected '>>'");
+                    }
+                    ++cursor;
+                    token.type = ASM_TOKEN_SHIFT_RIGHT;
+                    break;
                 case '(': token.type = ASM_TOKEN_LPAREN; break;
                 case ')': token.type = ASM_TOKEN_RPAREN; break;
                 default:

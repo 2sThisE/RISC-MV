@@ -1,97 +1,128 @@
 # Computer VM
 
-독자 ISA를 실행하는 가상 CPU/컴퓨터 프로젝트다. 64비트 범용 연산, 128비트 정수 SIMD, IEEE-754 스칼라·벡터 부동소수점, MMU·예외·멀티코어와 외부 장치를 지원하며 구현과 개발 도구를 분리한다.
+독자 ISA를 실행하는 가상 CPU/컴퓨터 프로젝트다. 64비트 정수, SIMD와
+부동소수점, MMU·예외·멀티코어, 동적 VIO 장치와 GPT/FAT32 부팅을
+지원한다.
 
-## 폴더 구조
+## 소스 구조
 
 ```text
 computer/
-├─ src/                 VM 본체와 실행 프로그램 C 소스
-├─ include/             VM, ISA, 장치 ABI와 프로토콜 헤더
-├─ devices/             외부 VIO 장치 모듈 소스와 빌드 스크립트
-├─ tools/assembler/     독자 ISA용 2-pass 어셈블러
-├─ examples/            게스트 어셈블리와 예제 생성기 소스
-├─ tests/               통합 테스트 러너와 테스트 suite
-├─ docs/                ISA 및 장치 규격 문서
-├─ build/               실행 파일, DLL, 생성된 예제 바이너리
-│  └─ modules/          main이 시작할 때 자동 연결하는 장치 모듈
-└─ build.ps1            VM 본체 빌드 진입점
+├─ src/                         VM 본체
+├─ include/                     공용 ABI와 프로토콜 헤더
+├─ kernel/                      reference kernel
+├─ examples/
+│  ├─ boot/                     ROM·loader·disk 부팅 예제
+│  ├─ benchmarks/               ALU·branch·memory·MMU 벤치마크
+│  ├─ block/                    block device 예제
+│  ├─ calculation/              raw 계산 바이너리 예제
+│  ├─ counter/                  반복문 예제
+│  ├─ display/                  framebuffer 예제
+│  ├─ hello/                    UART 출력 예제
+│  ├─ keyboard/                 keyboard 예제
+│  ├─ linker/                   다중 오브젝트 링크 예제
+│  └─ syscall/                  system call 예제
+├─ devices/
+│  ├─ block/
+│  ├─ display/
+│  ├─ keyboard/
+│  └─ sample_counter/
+├─ tools/
+│  ├─ assembler/
+│  ├─ linker/
+│  ├─ kernel_image/
+│  ├─ disk_image/
+│  └─ object/
+├─ tests/
+├─ docs/
+│  ├─ boot/
+│  ├─ devices/
+│  ├─ examples/
+│  ├─ kernel/
+│  ├─ system/
+│  ├─ tests/
+│  └─ tools/
+└─ build.ps1                   유일한 빌드 진입점
 ```
 
-`src`는 `include`의 헤더를 사용하며, 장치 모듈도 내부 구현 대신 `include/device_abi.h`와 각 프로토콜 헤더에만 의존한다. 컴파일 결과는 소스 폴더에 섞이지 않고 `build` 아래에 생성된다.
+예제와 장치는 프로젝트 이름별 하위 폴더가 하나의 독립 빌드 단위다. 하위
+폴더에는 별도 빌드 스크립트를 두지 않는다.
 
-## 대표 명령
+## 빌드
 
-프로젝트 루트에서 실행한다.
+옵션 없이 실행하면 기존 `build` 폴더를 완전히 초기화하고 VM, 모든 도구,
+커널, 장치, 예제와 테스트 러너를 빌드한다.
 
 ```powershell
-# VM 본체
 .\build.ps1
-
-# 어셈블러
-.\tools\assembler\build.ps1
-
-# kernel.cvm 패키저
-.\tools\kernel_image\build.ps1
-
-# 전체 테스트
-.\tests\build_runner.ps1
-.\build\test_runner.exe
-
-# 외부 장치
-.\devices\build_sample.ps1
-.\devices\build_display.ps1
-.\devices\build_block.ps1
-.\devices\build_keyboard.ps1
 ```
 
-실행 옵션 전체와 예시는 내장 도움말에서 확인할 수 있다.
+개별 프로젝트는 폴더 이름으로 선택한다. 선택 빌드도 기본적으로 `build`를
+먼저 초기화한다.
 
 ```powershell
-.\build\main.exe --help
+# counter 예제와 실행에 필요한 VM·도구
+.\build.ps1 -e counter
+
+# block 장치 하나
+.\build.ps1 -d block
+
+# boot 예제와 block 장치를 함께 빌드
+.\build.ps1 -e boot -d block
+
+# 기존 산출물을 유지하면서 선택 대상을 갱신
+.\build.ps1 -e keyboard -d keyboard -nc
 ```
 
-짧은 옵션과 긴 옵션을 모두 지원한다. 예를 들어 `-r`, `-l`, `-rom`, `-c`, `-t`는 각각 `--ram`, `--load`, `--rom`, `--cores`, `--threads`로도 쓸 수 있다. 인자 오류는 `main.exe: error: ...` 형식으로 표준 오류에 출력되고 종료 코드 2를 반환한다. 도움말과 정상 실행은 0, VM 초기화·실행 실패는 1을 반환한다.
+사용 가능한 예제 이름은 `benchmarks`, `block`, `boot`, `calculation`,
+`counter`, `display`, `hello`, `keyboard`, `linker`, `syscall`이다. 장치
+이름은 `block`, `display`, `keyboard`, `sample_counter`다. `-e all`과
+`-d all`도 지원한다.
 
-Boot ROM에서 시작하려면 ROM 이미지를 `0x7FFFF00000` 기준으로 어셈블하고 `-rom`으로 실행한다. 이 모드에서는 `-l`이 선택 사항이며, 둘 다 주면 ROM에서 시작하되 `-l` 바이너리도 RAM 1번지에 미리 적재된다.
+## 빌드 출력 구조
+
+`build` 루트에는 `main.exe`와 유형별 폴더만 생성된다.
+
+```text
+build/
+├─ main.exe
+├─ tools/
+│  ├─ vmasm.exe
+│  ├─ cvmlink.exe
+│  ├─ vmkimg.exe
+│  ├─ vmkdisk.exe
+│  ├─ test_runner.exe
+│  ├─ lst/
+│  └─ sym/
+├─ kernel/
+├─ devices/                     모든 장치 DLL을 직접 배치
+│  ├─ lst/
+│  └─ sym/
+├─ examples/                    모든 예제 결과를 직접 배치
+│  ├─ lst/                      assembler listing
+│  └─ sym/                      symbol/map 파일
+└─ modules/                     장치 DLL과 설정 자동 복사 위치
+```
+
+## 실행 예시
 
 ```powershell
-.\tools\assembler\build.ps1
-.\examples\build_boot_rom.ps1
-.\build\main.exe -r 4096 -rom .\build\examples\boot_rom.bin
+.\build\main.exe -r 4096 `
+    -l .\build\examples\counter.bin
+
+.\build\tools\test_runner.exe
+
+.\examples\boot\run_boot_demo.ps1
 ```
 
-예제 ROM은 UART로 `ROM`을 출력하고 종료한다. ROM은 읽기·실행만 가능하고, MMIO는 데이터 LOAD/STORE만 가능하며 명령어 fetch는 거부된다.
+부팅 예제는 ROM에서 시작해 VIO block device의 GPT/FAT32 파티션에서
+`BOOT.CVM`과 `KERNEL.CVM`을 읽는다. reference kernel은 BootInfo, PMM,
+MMU, VBR, W^X와 page-fault 복구를 검사하고 성공하면 UART에
+`KERNEL: READY`를 출력한다.
 
-빌드된 외부 장치는 `build/devices`에 보관된다. 별도 `-d` 인자 없이 항상 연결할 장치는 `main.exe` 옆의 `modules` 폴더에 복사한다.
+장치를 빌드하면 DLL이 `build/devices`와 `build/modules`에 동시에
+생성된다. 설정이 필수인 block 장치는 `.conf`도 자동 생성되며, boot 예제를
+함께 빌드하면 생성된 `system.img`를 읽기 전용으로 연결하도록 갱신된다.
 
-```powershell
-Copy-Item .\build\devices\sample_counter.dll .\build\modules\
-.\build\main.exe -r 1024 -l .\examples\calculation.bin
-```
-
-설정이 필요한 모듈은 DLL과 같은 이름의 `.conf` 파일을 함께 둔다. 예를 들어 `block_device.dll`은 `block_device.conf`의 `path=.\disk.img;create=67108864` 문자열을 `create()` 설정으로 받는다. `-d/-dc`도 일회성 또는 명시적 연결용으로 계속 지원한다.
-
-예제 어셈블:
-
-```powershell
-.\build\vmasm.exe .\examples\counter.asm `
-    -o .\build\examples\counter.bin `
-    --symbols .\build\examples\counter.sym `
-    --listing .\build\examples\counter.lst
-
-.\build\main.exe -r 4096 -l .\build\examples\counter.bin
-```
-
-키보드 게스트 데모:
-
-```powershell
-.\examples\build_keyboard_demo.ps1
-Copy-Item .\build\devices\keyboard_device.dll .\build\modules\
-.\build\main.exe -r 4096 -l .\build\examples\keyboard_demo.bin `
-    -display window
-```
-
-키 이벤트는 UART를 통해 터미널에 출력되며 Escape를 누르면 VM이 종료된다.
-
-세부 규격은 `docs/ISA.md`, `docs/BOOT.md`, `docs/BOOT_FORMAT.md`, `docs/SYSTEM.md`, `docs/IRQ_CONTROLLER.md`, `docs/DEVICE_ABI.md`, `docs/DISPLAY.md`, `docs/KEYBOARD.md`, `docs/BLOCK_DEVICE.md`를 참고한다.
+세부 규격은 `docs/system`, `docs/boot`, `docs/devices`, `docs/tools`,
+`docs/examples`, `docs/kernel`, `docs/tests` 아래에서 분류별로 확인할 수 있다.

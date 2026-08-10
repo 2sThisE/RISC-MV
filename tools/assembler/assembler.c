@@ -152,29 +152,116 @@ static int parse_unary(LineParser *parser,
         *value = UINT64_C(0) - *value;
         return 1;
     }
+    if (consume_token(parser, ASM_TOKEN_TILDE)) {
+        if (!parse_unary(parser, value, resolved)) return 0;
+        *value = ~*value;
+        return 1;
+    }
     return parse_primary(parser, value, resolved);
 }
 
-static int parse_expression(LineParser *parser,
-                            uint64_t *value,
-                            int *resolved)
+static int parse_multiply(LineParser *parser, uint64_t *value, int *resolved)
 {
-    if (!parse_unary(parser, value, resolved)) {
-        return 0;
+    if (!parse_unary(parser, value, resolved)) return 0;
+    while (current_token(parser)->type == ASM_TOKEN_STAR ||
+           current_token(parser)->type == ASM_TOKEN_SLASH ||
+           current_token(parser)->type == ASM_TOKEN_PERCENT) {
+        AsmTokenType operation = current_token(parser)->type;
+        const AsmToken *operator_token = current_token(parser);
+        ++parser->index;
+        uint64_t right;
+        int right_resolved;
+        if (!parse_unary(parser, &right, &right_resolved)) return 0;
+        if (right_resolved && right == 0 && operation != ASM_TOKEN_STAR)
+            return parser_error(parser, operator_token,
+                                "division or remainder by zero");
+        int both = *resolved && right_resolved;
+        if (operation == ASM_TOKEN_STAR) *value *= right;
+        else if (both && operation == ASM_TOKEN_SLASH) *value /= right;
+        else if (both) *value %= right;
+        else *value = 0;
+        *resolved = both;
     }
+    return 1;
+}
+
+static int parse_add(LineParser *parser, uint64_t *value, int *resolved)
+{
+    if (!parse_multiply(parser, value, resolved)) return 0;
     while (current_token(parser)->type == ASM_TOKEN_PLUS ||
            current_token(parser)->type == ASM_TOKEN_MINUS) {
         AsmTokenType operation = current_token(parser)->type;
         ++parser->index;
         uint64_t right;
         int right_resolved;
-        if (!parse_unary(parser, &right, &right_resolved)) {
-            return 0;
-        }
+        if (!parse_multiply(parser, &right, &right_resolved)) return 0;
         *resolved = *resolved && right_resolved;
         *value = operation == ASM_TOKEN_PLUS
                      ? *value + right
                      : *value - right;
+    }
+    return 1;
+}
+
+static int parse_shift(LineParser *parser, uint64_t *value, int *resolved)
+{
+    if (!parse_add(parser, value, resolved)) return 0;
+    while (current_token(parser)->type == ASM_TOKEN_SHIFT_LEFT ||
+           current_token(parser)->type == ASM_TOKEN_SHIFT_RIGHT) {
+        AsmTokenType operation = current_token(parser)->type;
+        const AsmToken *operator_token = current_token(parser);
+        ++parser->index;
+        uint64_t right;
+        int right_resolved;
+        if (!parse_add(parser, &right, &right_resolved)) return 0;
+        if (right_resolved && right >= 64)
+            return parser_error(parser, operator_token,
+                                "expression shift must be between 0 and 63");
+        int both = *resolved && right_resolved;
+        if (both)
+            *value = operation == ASM_TOKEN_SHIFT_LEFT
+                         ? *value << right : *value >> right;
+        else *value = 0;
+        *resolved = both;
+    }
+    return 1;
+}
+
+static int parse_and(LineParser *parser, uint64_t *value, int *resolved)
+{
+    if (!parse_shift(parser, value, resolved)) return 0;
+    while (consume_token(parser, ASM_TOKEN_AMPERSAND)) {
+        uint64_t right;
+        int right_resolved;
+        if (!parse_shift(parser, &right, &right_resolved)) return 0;
+        *value &= right;
+        *resolved = *resolved && right_resolved;
+    }
+    return 1;
+}
+
+static int parse_xor(LineParser *parser, uint64_t *value, int *resolved)
+{
+    if (!parse_and(parser, value, resolved)) return 0;
+    while (consume_token(parser, ASM_TOKEN_CARET)) {
+        uint64_t right;
+        int right_resolved;
+        if (!parse_and(parser, &right, &right_resolved)) return 0;
+        *value ^= right;
+        *resolved = *resolved && right_resolved;
+    }
+    return 1;
+}
+
+static int parse_expression(LineParser *parser, uint64_t *value, int *resolved)
+{
+    if (!parse_xor(parser, value, resolved)) return 0;
+    while (consume_token(parser, ASM_TOKEN_PIPE)) {
+        uint64_t right;
+        int right_resolved;
+        if (!parse_xor(parser, &right, &right_resolved)) return 0;
+        *value |= right;
+        *resolved = *resolved && right_resolved;
     }
     return 1;
 }
@@ -709,6 +796,41 @@ static int process_entry(LineParser *parser)
     return 1;
 }
 
+static int process_equ(LineParser *parser)
+{
+    const AsmToken *name = current_token(parser);
+    if (name->type != ASM_TOKEN_IDENTIFIER) {
+        return parser_error(parser, name, ".equ requires a symbol name");
+    }
+    ++parser->index;
+    if (!consume_token(parser, ASM_TOKEN_COMMA)) {
+        return parser_error(parser, current_token(parser),
+                            "expected ',' after .equ symbol");
+    }
+    uint64_t value;
+    int resolved;
+    if (!parse_expression(parser, &value, &resolved) ||
+        !ensure_statement_end(parser)) return 0;
+    if (!resolved) {
+        return parser_error(parser, name,
+                            ".equ expression must be known in the first pass");
+    }
+    if (parser->context->pass == 1) {
+        if (!asm_symbol_define(parser->context->symbols, name->text, value)) {
+            return parser_error(parser, name,
+                                "duplicate .equ symbol or allocation failure");
+        }
+    } else {
+        uint64_t previous;
+        if (!asm_symbol_lookup(parser->context->symbols, name->text,
+                               &previous) || previous != value) {
+            return parser_error(parser, name,
+                                ".equ value changed between assembly passes");
+        }
+    }
+    return 1;
+}
+
 static int process_directive(LineParser *parser, const char *directive)
 {
     if (asm_text_equal_ignore_case(directive, ".byte")) {
@@ -740,6 +862,10 @@ static int process_directive(LineParser *parser, const char *directive)
     }
     if (asm_text_equal_ignore_case(directive, ".entry")) {
         return process_entry(parser);
+    }
+    if (asm_text_equal_ignore_case(directive, ".equ") ||
+        asm_text_equal_ignore_case(directive, ".set")) {
+        return process_equ(parser);
     }
     return parser_error(parser,
                         &parser->tokens[parser->index - 1],
