@@ -10,9 +10,17 @@
 ```
 
 예제 이름은 `benchmarks`, `block`, `boot`, `calculation`, `counter`,
-`display`, `hello`, `keyboard`, `linker`, `syscall`이다. 부팅 예제 실행은
+`display`, `hello`, `keyboard`, `linker`, `llvm_ir`, `syscall`이다. 부팅 예제 실행은
 다음 스크립트를 사용한다.
 
 ```powershell
 .\examples\boot\run_boot_demo.ps1
 ```
+
+`llvm_ir` 예제는 LLVM text IR과 Clang C 입력을 `cvmir`/`cvmclang`으로
+변환하고 startup 오브젝트와 링크한다. 산출물에는
+`llvm_arithmetic.cvm`, `clang_arithmetic.cvm`, `kernel_memory.cvm`과 기본
+`crt0.o`/`libcvm.a`를 사용하는 `freestanding_main.cvm`이 있다.
+
+`examples/compiler`의 자체 `cvmcc` 예제는 과거 회귀 참고용으로만 보존하며
+기본 빌드 대상이 아니다.

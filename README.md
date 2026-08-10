@@ -16,11 +16,13 @@ computer/
 │  ├─ benchmarks/               ALU·branch·memory·MMU 벤치마크
 │  ├─ block/                    block device 예제
 │  ├─ calculation/              raw 계산 바이너리 예제
+│  ├─ compiler/                 폐기된 자체 컴파일러 회귀 자료
 │  ├─ counter/                  반복문 예제
 │  ├─ display/                  framebuffer 예제
 │  ├─ hello/                    UART 출력 예제
 │  ├─ keyboard/                 keyboard 예제
 │  ├─ linker/                   다중 오브젝트 링크 예제
+│  ├─ llvm_ir/                  LLVM IR→CVM 변환 예제
 │  └─ syscall/                  system call 예제
 ├─ devices/
 │  ├─ block/
@@ -29,7 +31,10 @@ computer/
 │  └─ sample_counter/
 ├─ tools/
 │  ├─ assembler/
+│  ├─ archive/
 │  ├─ linker/
+│  ├─ compiler/                 폐기된 자체 컴파일러 회귀 자료
+│  ├─ ir_translator/
 │  ├─ kernel_image/
 │  ├─ disk_image/
 │  └─ object/
@@ -75,7 +80,8 @@ computer/
 ```
 
 사용 가능한 예제 이름은 `benchmarks`, `block`, `boot`, `calculation`,
-`counter`, `display`, `hello`, `keyboard`, `linker`, `syscall`이다. 장치
+`counter`, `display`, `hello`, `keyboard`, `linker`, `llvm_ir`,
+`syscall`이다. 장치
 이름은 `block`, `display`, `keyboard`, `sample_counter`다. `-e all`과
 `-d all`도 지원한다.
 
@@ -89,6 +95,9 @@ build/
 ├─ tools/
 │  ├─ vmasm.exe
 │  ├─ cvmlink.exe
+│  ├─ cvmar.exe
+│  ├─ cvmir.exe
+│  ├─ cvmclang.ps1
 │  ├─ vmkimg.exe
 │  ├─ vmkdisk.exe
 │  ├─ test_runner.exe
@@ -101,7 +110,8 @@ build/
 ├─ examples/                    모든 예제 결과를 직접 배치
 │  ├─ lst/                      assembler listing
 │  └─ sym/                      symbol/map 파일
-└─ modules/                     장치 DLL과 설정 자동 복사 위치
+├─ modules/                     장치 DLL과 설정 자동 복사 위치
+└─ sysroot/                     CVM headers, crt0.o, libcvm.a
 ```
 
 ## 실행 예시

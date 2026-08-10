@@ -84,6 +84,7 @@ static void test_directive_layout(void)
         ".align 4, 0xAA\n"
         "aligned: .word 0x3456\n"
         ".space 2, 0xCC\n"
+        ".zero 3\n"
         ".org 0x10\n"
         ".dword 0x89ABCDEF\n"
         ".qword -1\n";

@@ -592,4 +592,4 @@ MOVI64 R15, stack_top
     --listing .\build\examples\lst\counter.lst
 ```
 
-레이블 기반 절대/상대 분기, `R0`~`R15`와 `SP` 별칭, 숫자 표현식, 문자열 및 `.byte`/`.word`/`.dword`/`.qword`/`.ascii`/`.asciz`/`.space`/`.align`/`.org`/`.entry` 지시어를 지원한다. 전체 문법과 raw 바이너리의 진입점 제약은 `docs/tools/ASSEMBLER.md`를 참고한다.
+레이블 기반 절대/상대 분기, `R0`~`R15`와 `SP` 별칭, 숫자 표현식, 문자열 및 `.byte`/`.word`/`.dword`/`.qword`/`.ascii`/`.asciz`/`.space`/`.zero`/`.align`/`.org`/`.entry` 지시어를 지원한다. 재배치 모드에는 전역·weak·common·타입·크기 심볼 메타데이터도 있다. 전체 문법과 raw 바이너리의 진입점 제약은 `docs/tools/ASSEMBLER.md`를 참고한다.

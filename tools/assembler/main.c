@@ -194,9 +194,9 @@ int main(int argc, char **argv)
         if (!okay) {
             fprintf(stderr, "vmasm: %s: %s\n", output_path, object_error);
         } else {
-            printf("Assembled relocatable object: %zu sections, %zu symbols "
-                   "-> %s\n", object.section_count, object.symbol_count,
-                   output_path);
+            printf("Assembled relocatable object: %zu sections, %zu symbols, "
+                   "%zu relocations -> %s\n", object.section_count,
+                   object.symbol_count, object.relocation_count, output_path);
         }
         cvm_object_destroy(&object);
         return okay ? 0 : 1;

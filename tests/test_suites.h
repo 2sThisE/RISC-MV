@@ -3,6 +3,7 @@
 
 /* 새 suite는 구현 함수와 이 목록의 한 줄만 추가하면 runner에 등록된다. */
 #define TEST_SUITE_LIST(X)                         \
+    X("archive_format", test_archive_format)     \
     X("assembler", test_assembler)               \
     X("atomic", test_atomic)                     \
     X("block_device", test_block_device)         \
@@ -10,6 +11,7 @@
     X("boot_rom", test_boot_rom)                 \
     X("bus_timer", test_bus_timer)               \
     X("core_control", test_core_control)         \
+    X("compiler", test_compiler)                 \
     X("device_manager", test_device_manager)     \
     X("disk_image", test_disk_image)             \
     X("display", test_display)                   \
@@ -17,6 +19,7 @@
     X("exception", test_exception)               \
     X("firmware", test_firmware)                 \
     X("interrupt", test_interrupt)               \
+    X("ir_translator", test_ir_translator)       \
     X("irq_controller", test_irq_controller)     \
     X("ipi", test_ipi)                           \
     X("isa_extension", test_isa_extension)       \

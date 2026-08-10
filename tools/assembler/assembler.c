@@ -771,6 +771,25 @@ static int process_space(LineParser *parser)
     return 1;
 }
 
+static int process_zero(LineParser *parser)
+{
+    uint64_t count;
+    int resolved;
+    if (!parse_expression(parser, &count, &resolved) ||
+        !ensure_statement_end(parser)) return 0;
+    if (!resolved)
+        return parser_error(parser, current_token(parser),
+                            ".zero size must be known in the first pass");
+    if (count > ASM_MAX_OUTPUT_SIZE)
+        return parser_error(parser, current_token(parser),
+                            "invalid .zero size");
+    size_t start = parser->context->offset;
+    if (!add_output_size(parser, (size_t)count)) return 0;
+    if (parser->context->pass == 2 && count != 0)
+        memset(parser->context->output + start, 0, (size_t)count);
+    return 1;
+}
+
 static int process_entry(LineParser *parser)
 {
     uint64_t entry;
@@ -859,6 +878,9 @@ static int process_directive(LineParser *parser, const char *directive)
     }
     if (asm_text_equal_ignore_case(directive, ".space")) {
         return process_space(parser);
+    }
+    if (asm_text_equal_ignore_case(directive, ".zero")) {
+        return process_zero(parser);
     }
     if (asm_text_equal_ignore_case(directive, ".entry")) {
         return process_entry(parser);

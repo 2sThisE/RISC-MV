@@ -24,6 +24,7 @@ $AllExamples = @(
     'hello',
     'keyboard',
     'linker',
+    'llvm_ir',
     'syscall'
 )
 $AllDevices = @('block', 'display', 'keyboard', 'sample_counter')
@@ -37,6 +38,31 @@ function Assert-LastExitCode([string]$Action) {
 function Invoke-Gcc([string[]]$CompilerArguments, [string]$Action) {
     & gcc @CompilerArguments
     Assert-LastExitCode $Action
+}
+
+function Get-LlvmDevelopmentPaths {
+    $llvmConfig = Get-Command llvm-config -ErrorAction SilentlyContinue
+    if ($null -eq $llvmConfig) {
+        throw 'LLVM development tools are required: llvm-config was not found in PATH'
+    }
+    $version = (& $llvmConfig.Source --version).Trim()
+    Assert-LastExitCode 'LLVM version query'
+    if (-not $version.StartsWith('22.')) {
+        throw "LLVM 22.x is required, but llvm-config reports $version"
+    }
+    $prefix = (& $llvmConfig.Source --prefix).Trim()
+    Assert-LastExitCode 'LLVM prefix query'
+    $include = Join-Path $prefix 'include'
+    $library = Join-Path $prefix 'lib'
+    if (-not (Test-Path -LiteralPath (Join-Path $include 'llvm-c\IRReader.h')) -or
+        -not (Test-Path -LiteralPath $library)) {
+        throw "LLVM 22 development headers or libraries are missing under $prefix"
+    }
+    return [pscustomobject]@{
+        Version = $version
+        Include = $include
+        Library = $library
+    }
 }
 
 function New-BuildDirectory([string]$RelativePath) {
@@ -137,20 +163,105 @@ function Build-Linker {
     $output = New-BuildDirectory 'tools'
     $sources = @(
         'tools\linker\main.c',
+        'tools\object\archive_format.c',
         'tools\object\object_format.c',
-        'tools\assembler\assembler.c',
-        'tools\assembler\lexer.c',
-        'tools\assembler\symbol.c',
-        'tools\assembler\encoder.c',
         'src\boot_format.c'
     ) | ForEach-Object { Join-Path $ProjectRoot $_ }
     $arguments = @(
         '-std=c11', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-O2',
         '-I', (Join-Path $ProjectRoot 'include'),
-        '-I', (Join-Path $ProjectRoot 'tools\assembler'),
         '-I', (Join-Path $ProjectRoot 'tools\object')
     ) + $sources + @('-o', (Join-Path $output 'cvmlink.exe'))
     Invoke-Gcc $arguments 'linker build'
+}
+
+function Build-ArchiveTool {
+    Write-Host '[tools/archive] building cvmar'
+    $output = New-BuildDirectory 'tools'
+    $sources = @(
+        'tools\archive\main.c',
+        'tools\object\archive_format.c',
+        'tools\object\object_format.c'
+    ) | ForEach-Object { Join-Path $ProjectRoot $_ }
+    $arguments = @(
+        '-std=c11', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-O2',
+        '-I', (Join-Path $ProjectRoot 'tools\object')
+    ) + $sources + @('-o', (Join-Path $output 'cvmar.exe'))
+    Invoke-Gcc $arguments 'archive tool build'
+}
+
+function Build-CCompiler {
+    Write-Host '[tools/compiler] building cvmcc'
+    $output = New-BuildDirectory 'tools'
+    $sources = @(
+        'tools\compiler\main.c',
+        'tools\compiler\compiler.c',
+        'tools\assembler\assembler.c',
+        'tools\assembler\lexer.c',
+        'tools\assembler\symbol.c',
+        'tools\assembler\encoder.c',
+        'tools\assembler\object_assembler.c',
+        'tools\object\object_format.c'
+    ) | ForEach-Object { Join-Path $ProjectRoot $_ }
+    $arguments = @(
+        '-std=c11', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-O2',
+        '-I', (Join-Path $ProjectRoot 'include'),
+        '-I', (Join-Path $ProjectRoot 'tools\compiler'),
+        '-I', (Join-Path $ProjectRoot 'tools\assembler'),
+        '-I', (Join-Path $ProjectRoot 'tools\object')
+    ) + $sources + @('-o', (Join-Path $output 'cvmcc.exe'))
+    Invoke-Gcc $arguments 'C compiler build'
+}
+
+function Build-IrTranslator {
+    $llvm = Get-LlvmDevelopmentPaths
+    Write-Host "[tools/ir_translator] building cvmir with LLVM $($llvm.Version)"
+    $output = New-BuildDirectory 'tools'
+    $sources = @(
+        'tools\ir_translator\main.c',
+        'tools\ir_translator\cvmir_llvm.c',
+        'tools\assembler\assembler.c',
+        'tools\assembler\lexer.c',
+        'tools\assembler\symbol.c',
+        'tools\assembler\encoder.c',
+        'tools\assembler\object_assembler.c',
+        'tools\object\object_format.c'
+    ) | ForEach-Object { Join-Path $ProjectRoot $_ }
+    $arguments = @(
+        '-std=c11', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-O2',
+        '-I', (Join-Path $ProjectRoot 'include'),
+        '-I', (Join-Path $ProjectRoot 'tools\ir_translator'),
+        '-I', (Join-Path $ProjectRoot 'tools\assembler'),
+        '-I', (Join-Path $ProjectRoot 'tools\object'),
+        '-I', $llvm.Include
+    ) + $sources + @(
+        '-L', $llvm.Library,
+        '-lLLVM-22',
+        '-o', (Join-Path $output 'cvmir.exe')
+    )
+    Invoke-Gcc $arguments 'LLVM IR translator build'
+
+    $driver = Join-Path $output 'cvmclang.ps1'
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot `
+        'tools\ir_translator\cvmclang.ps1') -Destination $driver -Force
+    New-BuildDirectory 'sysroot' | Out-Null
+    $sysrootInclude = New-BuildDirectory 'sysroot\include'
+    $sysrootLibrary = New-BuildDirectory 'sysroot\lib'
+    Copy-Item -Path (Join-Path $ProjectRoot `
+        'tools\ir_translator\sysroot\include\*') `
+        -Destination $sysrootInclude -Recurse -Force
+    $builtinsObject = Join-Path $sysrootLibrary 'builtins.o'
+    & $driver (Join-Path $ProjectRoot `
+        'tools\ir_translator\sysroot\builtins.c') `
+        -CompileOnly -OutputFile $builtinsObject
+    Assert-LastExitCode 'CVM runtime builtins compilation'
+    & (Join-Path $output 'vmasm.exe') `
+        (Join-Path $ProjectRoot 'tools\ir_translator\sysroot\crt0.s') `
+        -c -o (Join-Path $sysrootLibrary 'crt0.o')
+    Assert-LastExitCode 'CVM crt0 assembly'
+    & (Join-Path $output 'cvmar.exe') rcs `
+        (Join-Path $sysrootLibrary 'libcvm.a') $builtinsObject
+    Assert-LastExitCode 'CVM runtime archive creation'
 }
 
 function Build-KernelImageTool {
@@ -186,23 +297,133 @@ function Build-DiskImageTool {
 function Build-AllTools {
     Build-Assembler
     Build-Linker
+    Build-ArchiveTool
+    Build-IrTranslator
     Build-KernelImageTool
     Build-DiskImageTool
 }
 
-function Build-Kernel {
-    Write-Host '[kernel] assembling and linking reference kernel'
-    $output = New-BuildDirectory 'kernel'
+function Build-CompilerExample {
+    $output = New-BuildDirectory 'examples'
+    $symbolOutput = New-BuildDirectory 'examples\sym'
+    $compiler = Join-Path $BuildRoot 'tools\cvmcc.exe'
     $assembler = Join-Path $BuildRoot 'tools\vmasm.exe'
     $linker = Join-Path $BuildRoot 'tools\cvmlink.exe'
+    & $compiler -c (Join-Path $ProjectRoot 'examples\compiler\compiler_demo.c') `
+        -o (Join-Path $output 'compiler_demo.o')
+    Assert-LastExitCode 'compiler example C compilation'
+    & $assembler (Join-Path $ProjectRoot 'examples\compiler\start.s') -c `
+        -o (Join-Path $output 'compiler_start.o')
+    Assert-LastExitCode 'compiler example startup assembly'
+    & $linker (Join-Path $output 'compiler_start.o') `
+        (Join-Path $output 'compiler_demo.o') `
+        -o (Join-Path $output 'compiler_demo.cvm') `
+        --base 0x10000 --entry compiler_demo_entry `
+        --map (Join-Path $symbolOutput 'compiler_demo.map')
+    Assert-LastExitCode 'compiler example link'
+}
+
+function Build-LLVMIRExample {
+    $output = New-BuildDirectory 'examples'
+    $symbolOutput = New-BuildDirectory 'examples\sym'
+    $translator = Join-Path $BuildRoot 'tools\cvmir.exe'
+    $clangDriver = Join-Path $BuildRoot 'tools\cvmclang.ps1'
+    $assembler = Join-Path $BuildRoot 'tools\vmasm.exe'
+    $linker = Join-Path $BuildRoot 'tools\cvmlink.exe'
+    & $translator -c (Join-Path $ProjectRoot 'examples\llvm_ir\arithmetic.ll') `
+        -o (Join-Path $output 'llvm_arithmetic.o')
+    Assert-LastExitCode 'LLVM IR example translation'
+    & $assembler (Join-Path $ProjectRoot 'examples\llvm_ir\start.s') -c `
+        -o (Join-Path $output 'llvm_start.o')
+    Assert-LastExitCode 'LLVM IR example startup assembly'
+    & $linker (Join-Path $output 'llvm_start.o') `
+        (Join-Path $output 'llvm_arithmetic.o') `
+        -o (Join-Path $output 'llvm_arithmetic.cvm') `
+        --base 0x10000 --entry cvmir_demo_entry `
+        --map (Join-Path $symbolOutput 'llvm_arithmetic.map')
+    Assert-LastExitCode 'LLVM IR example link'
+
+    $clang = Get-Command clang -ErrorAction SilentlyContinue
+    if ($null -ne $clang) {
+        Write-Host '[examples/llvm_ir] validating cvmclang C pipeline'
+        & $clangDriver `
+            (Join-Path $ProjectRoot 'examples\llvm_ir\clang_arithmetic.c') `
+            -CompileOnly `
+            -o (Join-Path $output 'clang_arithmetic.o')
+        Assert-LastExitCode 'cvmclang arithmetic compilation'
+        & $linker (Join-Path $output 'llvm_start.o') `
+            (Join-Path $output 'clang_arithmetic.o') `
+            -o (Join-Path $output 'clang_arithmetic.cvm') `
+            --base 0x10000 --entry cvmir_demo_entry `
+            --map (Join-Path $symbolOutput 'clang_arithmetic.map')
+        Assert-LastExitCode 'installed Clang IR link'
+
+        & $clangDriver `
+            (Join-Path $ProjectRoot 'examples\llvm_ir\kernel_memory.c') `
+            -o (Join-Path $output 'kernel_memory.cvm') `
+            -Startup (Join-Path $ProjectRoot `
+                'examples\llvm_ir\kernel_memory_start.s') `
+            -Entry cvm_kernel_memory_entry `
+            -Base 0x10000
+        Assert-LastExitCode 'cvmclang memory kernel compilation and link'
+
+        & $clangDriver `
+            (Join-Path $ProjectRoot 'examples\llvm_ir\freestanding_main.c') `
+            -o (Join-Path $output 'freestanding_main.cvm')
+        Assert-LastExitCode 'cvmclang default crt0 and libcvm link'
+    } else {
+        Write-Host '[examples/llvm_ir] Clang not found; skipping host IR check'
+    }
+}
+
+function Build-Kernel {
+    Write-Host '[kernel] building C reference kernel with assembly boundary'
+    $output = New-BuildDirectory 'kernel'
+    $assembler = Join-Path $BuildRoot 'tools\vmasm.exe'
+    $clangDriver = Join-Path $BuildRoot 'tools\cvmclang.ps1'
+    $linker = Join-Path $BuildRoot 'tools\cvmlink.exe'
+    & $assembler (Join-Path $ProjectRoot 'kernel\layout_start.s') -c `
+        -o (Join-Path $output 'layout_start.o')
+    Assert-LastExitCode 'kernel layout start assembly'
     & $assembler (Join-Path $ProjectRoot 'kernel\kernel.s') -c `
         -o (Join-Path $output 'kernel.o')
     Assert-LastExitCode 'kernel assembly'
-    & $linker (Join-Path $output 'kernel.o') `
-        -o (Join-Path $output 'kernel.cvm') `
-        --base 0x10000 --entry kernel_entry `
-        --map (Join-Path (New-BuildDirectory 'kernel\sym') 'kernel.map')
+    $kernelCObjects = @()
+    foreach ($sourceName in @('kernel_main.c', 'pmm.c', 'mmu.c', 'exception.c')) {
+        $objectName = [System.IO.Path]::ChangeExtension($sourceName, '.o')
+        $objectPath = Join-Path $output $objectName
+        & $clangDriver (Join-Path $ProjectRoot "kernel\$sourceName") `
+            -CompileOnly -IncludeDirectory (Join-Path $ProjectRoot 'include') `
+            -OutputFile $objectPath
+        Assert-LastExitCode "kernel C compilation ($sourceName)"
+        $kernelCObjects += $objectPath
+    }
+    & $assembler (Join-Path $ProjectRoot 'kernel\layout_end.s') -c `
+        -o (Join-Path $output 'layout_end.o')
+    Assert-LastExitCode 'kernel layout end assembly'
+    $kernelMap = Join-Path (New-BuildDirectory 'kernel\sym') 'kernel.map'
+    $kernelLinkArguments = @(
+        (Join-Path $output 'layout_start.o'),
+        (Join-Path $output 'kernel.o')
+    ) + $kernelCObjects + @(
+        (Join-Path $output 'layout_end.o'),
+        (Join-Path $BuildRoot 'sysroot\lib\libcvm.a'),
+        '-o', (Join-Path $output 'kernel.cvm'),
+        '--base', '0x10000', '--entry', 'kernel_entry',
+        '--map', $kernelMap
+    )
+    & $linker @kernelLinkArguments
     Assert-LastExitCode 'kernel link'
+
+    $kernelEndLine = Select-String -LiteralPath $kernelMap `
+        -Pattern '^([0-9A-Fa-f]{16}) kernel_bss_end$'
+    if ($null -eq $kernelEndLine) {
+        throw 'kernel link: kernel_bss_end is missing from the map file'
+    }
+    $kernelEnd = [Convert]::ToUInt64($kernelEndLine.Matches[0].Groups[1].Value, 16)
+    if ($kernelEnd -gt 0x20000) {
+        throw ('kernel link: image memory ends at 0x{0:X}; boot protocol limit is 0x20000' -f $kernelEnd)
+    }
 }
 
 function Build-DeviceProject([string]$Name) {
@@ -291,14 +512,22 @@ function Build-LinkerExample {
     $symbolOutput = New-BuildDirectory 'examples\sym'
     $assembler = Join-Path $BuildRoot 'tools\vmasm.exe'
     $linker = Join-Path $BuildRoot 'tools\cvmlink.exe'
+    $archiver = Join-Path $BuildRoot 'tools\cvmar.exe'
     & $assembler (Join-Path $ProjectRoot 'examples\linker\linker_demo_main.s') `
         -c -o (Join-Path $output 'linker_demo_main.o')
     Assert-LastExitCode 'linker example main assembly'
     & $assembler (Join-Path $ProjectRoot 'examples\linker\linker_demo_support.s') `
         -c -o (Join-Path $output 'linker_demo_support.o')
     Assert-LastExitCode 'linker example support assembly'
-    & $linker (Join-Path $output 'linker_demo_main.o') `
+    & $assembler (Join-Path $ProjectRoot 'examples\linker\linker_demo_optional.s') `
+        -c -o (Join-Path $output 'linker_demo_optional.o')
+    Assert-LastExitCode 'linker example optional assembly'
+    & $archiver create (Join-Path $output 'liblinker_demo.a') `
         (Join-Path $output 'linker_demo_support.o') `
+        (Join-Path $output 'linker_demo_optional.o')
+    Assert-LastExitCode 'linker example archive creation'
+    & $linker (Join-Path $output 'linker_demo_main.o') `
+        (Join-Path $output 'liblinker_demo.a') `
         -o (Join-Path $output 'linker_demo.cvm') `
         --map (Join-Path $symbolOutput 'linker_demo.map')
     Assert-LastExitCode 'linker example link'
@@ -363,17 +592,20 @@ function Build-ExampleProject([string]$Name) {
             Copy-Item -LiteralPath (Join-Path $ProjectRoot 'examples\calculation\calculation.bin') `
                 -Destination (Join-Path $output 'calculation.bin') -Force
         }
+        'compiler' { Build-CompilerExample }
         'counter' { Build-RawAssemblyExample 'counter' 'counter.asm' 'counter.bin' }
         'display' { Build-DisplayExample }
         'hello' { Build-RawAssemblyExample 'hello' 'hello.asm' 'hello.bin' }
         'keyboard' { Build-RawAssemblyExample 'keyboard' 'keyboard_demo.asm' 'keyboard_demo.bin' }
         'linker' { Build-LinkerExample }
+        'llvm_ir' { Build-LLVMIRExample }
         'syscall' { Build-RawAssemblyExample 'syscall' 'syscall_demo.asm' 'syscall_demo.bin' }
     }
 }
 
 function Build-Tests {
     Write-Host '[tests] building test runner'
+    $llvm = Get-LlvmDevelopmentPaths
     $output = New-BuildDirectory 'tools'
     $testSources = Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'tests') `
         -Filter '*_test.c' | Sort-Object Name | ForEach-Object FullName
@@ -389,6 +621,9 @@ function Build-Tests {
         'tools\assembler\assembler.c', 'tools\assembler\lexer.c',
         'tools\assembler\symbol.c', 'tools\assembler\encoder.c',
         'tools\assembler\object_assembler.c',
+        'tools\compiler\compiler.c',
+        'tools\ir_translator\cvmir_llvm.c',
+        'tools\object\archive_format.c',
         'tools\object\object_format.c'
     ) | ForEach-Object { Join-Path $ProjectRoot $_ }
     $arguments = @(
@@ -396,7 +631,10 @@ function Build-Tests {
         '-DVM_BLOCK_DEVICE_STATIC', '-DVM_KEYBOARD_DEVICE_STATIC',
         '-I', (Join-Path $ProjectRoot 'include'),
         '-I', (Join-Path $ProjectRoot 'tools\assembler'),
+        '-I', (Join-Path $ProjectRoot 'tools\compiler'),
+        '-I', (Join-Path $ProjectRoot 'tools\ir_translator'),
         '-I', (Join-Path $ProjectRoot 'tools\object'),
+        '-I', $llvm.Include,
         '-I', (Join-Path $ProjectRoot 'devices\block'),
         '-I', (Join-Path $ProjectRoot 'devices\display'),
         '-I', (Join-Path $ProjectRoot 'devices\keyboard'),
@@ -405,7 +643,11 @@ function Build-Tests {
         (Join-Path $ProjectRoot 'devices\block\block_device.c'),
         (Join-Path $ProjectRoot 'devices\display\display_device.c'),
         (Join-Path $ProjectRoot 'devices\keyboard\keyboard_device.c')
-    ) + $productionSources + @('-o', (Join-Path $output 'test_runner.exe'))
+    ) + $productionSources + @(
+        '-L', $llvm.Library,
+        '-lLLVM-22',
+        '-o', (Join-Path $output 'test_runner.exe')
+    )
     if ($IsWindowsHost) {
         $arguments += '-lbcrypt'
     }

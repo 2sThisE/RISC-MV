@@ -39,7 +39,8 @@ vmasm INPUT.asm -o OUTPUT.bin [--base ADDRESS]
 ```
 
 `.cvm`은 표준 오브젝트 확장자가 아니라 이 VM 플랫폼의 실행/부팅 이미지
-확장자다. 향후 정적 라이브러리는 통상 관례대로 `.a`를 사용하도록 예약했다.
+확장자다. 정적 라이브러리는 통상 관례대로 `.a`를 사용하며 `cvmar`로 만든다.
+자세한 사용법은 [STATIC_LIBRARY.md](STATIC_LIBRARY.md)를 참고한다.
 
 - `--base`: 코드가 적재될 가상/물리 시작 주소. 10진수 또는 `0x` 16진수로 지정한다.
 - `--symbols`: `주소 레이블` 형식의 심볼 맵을 만든다.
@@ -74,12 +75,15 @@ finish:
 
 ## 재배치 오브젝트와 소스 전처리
 
-오브젝트 소스는 `.section .text/.rodata/.data/.bss`, `.global`, `.extern`,
-`.entry`를 지원한다. `cvmlink`는 여러 `.o`의 전역 심볼을 해석하고 로컬
-심볼을 오브젝트별로 격리한 뒤, 각 섹션을 4KiB 정렬된 RX/R/RW/RW
-`CVMKERN1` 세그먼트로 만든다. `.bss`는 메모리 크기만 가지며 파일에는
-제로 바이트를 저장하지 않는다. 중복 전역, 미해결 외부 심볼, 실행 불가능한
-엔트리는 오류다.
+오브젝트 소스는 `.section .text/.rodata/.data/.bss`, `.global`/`.globl`,
+`.extern`, `.weak`, `.type`, `.size`, `.comm`, `.entry`를 지원한다.
+`cvmlink`는 여러 `.o`의 전역 심볼을 해석하고 로컬
+심볼을 오브젝트별로 격리한 뒤 실제 바이너리 재배치를 적용하고, 각 섹션을
+4KiB 정렬된 RX/R/RW/RW `CVMKERN1` 세그먼트로 만든다. `.o`에는 소스가
+아니라 기계어 바이트, 심볼 값, 재배치 표가 저장된다. `.bss`는 메모리 크기만
+가지며 파일에는 제로 바이트를 저장하지 않는다. 중복 전역, 미해결 외부 심볼,
+재배치 overflow, 실행 불가능한 엔트리는 오류다. 세부 포맷은
+[OBJECT_FORMAT.md](OBJECT_FORMAT.md)를 참고한다.
 
 `.include "relative/path.inc"`는 현재 파일 기준으로 포함하며 순환 포함과
 16단계 초과를 거부한다. 매크로는 다음 문법을 사용한다. `\@`는 매 확장마다
@@ -120,10 +124,28 @@ LOAD_PAIR 20, 22
 | `.ascii "text"` | 문자열 바이트 기록 |
 | `.asciz "text"` | 문자열과 끝의 NUL 기록 |
 | `.space count[, fill]` | 지정 바이트 수만큼 채움, 기본값 0 |
+| `.zero count` | 지정 바이트 수만큼 0으로 채움 |
 | `.align n[, fill]` | 현재 주소를 `n`의 배수로 전진시켜 채움 |
 | `.org address` | 현재 주소를 앞쪽 절대 주소로 이동 |
 | `.entry expression` | 진입점 메타데이터 지정 |
 | `.equ name, expression` | 변경 불가능한 정수 심볼 정의 |
 | `.set name, expression` | 현재는 `.equ`와 같은 정수 심볼 정의 |
+
+다음 지시어는 재배치 오브젝트 모드(`-c`)의 심볼 메타데이터다.
+
+| 지시어 | 동작 |
+|---|---|
+| `.global name...`, `.globl name...` | 다른 오브젝트에 공개할 strong 심볼 |
+| `.extern name...` | 다른 오브젝트가 제공해야 하는 심볼 |
+| `.weak name...` | weak 정의 또는 미정의 weak 참조 |
+| `.type name, function` | 함수 심볼 표시 |
+| `.type name, object` | 데이터 객체 심볼 표시 |
+| `.size name, expression` | 심볼 크기 기록. `$ - name` 사용 가능 |
+| `.comm name, size[, alignment]` | zero-fill tentative 전역 객체. 기본 정렬 8 |
+
+`.type`은 이 어셈블러의 정규 문법인 `function`/`object`를 사용하며 GNU
+assembler의 `@function` 표기는 사용하지 않는다. 해석되지 않은 weak 참조는
+링크 시 주소 0이 된다. 같은 common 심볼은 링커가 가장 큰 크기와 정렬로
+병합하고 strong 정의가 common보다 우선한다.
 
 문자열과 문자 리터럴은 `\0`, `\n`, `\r`, `\t`, `\\`, `\'`, `\"`, `\xNN` 이스케이프를 지원한다. `.org`는 뒤로 이동할 수 없고 전체 출력은 안전을 위해 256 MiB로 제한된다. `.org`는 재배치 가능한 `.o`에서는 허용되지 않는다.
