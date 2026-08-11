@@ -48,9 +48,21 @@ typedef struct {
 static void usage(const char *program)
 {
     fprintf(stderr,
-            "Usage: %s INPUT.o... -o OUTPUT.cvm [--base ADDRESS] "
+            "Usage: %s INPUT.o... -o OUTPUT.exf [--base ADDRESS] "
             "[--entry SYMBOL] [--map FILE] [--physical-relocatable]\n",
             program);
+}
+
+static int has_exf_extension(const char *path)
+{
+    if (path == NULL) return 0;
+    size_t length = strlen(path);
+    if (length < 4) return 0;
+    const char *extension = path + length - 4;
+    return extension[0] == '.' &&
+           (extension[1] == 'e' || extension[1] == 'E') &&
+           (extension[2] == 'x' || extension[2] == 'X') &&
+           (extension[3] == 'f' || extension[3] == 'F');
 }
 
 static int parse_u64(const char *text, uint64_t *value)
@@ -538,11 +550,11 @@ static int write_image(const char *path,
         return 0;
     }
     CvmKernelHeader header = {0};
-    memcpy(header.magic, CVM_KERNEL_MAGIC, 8);
+    memcpy(header.magic, RISC_VM_EXF_MAGIC, 8);
     header.format_major = CVM_KERNEL_FORMAT_MAJOR;
     header.format_minor = CVM_KERNEL_FORMAT_MINOR;
     header.header_size = CVM_KERNEL_HEADER_SIZE;
-    header.isa_id = CVM_ISA_ID;
+    header.isa_id = RISC_VM_ISA_ID;
     header.isa_version = CVM_ISA_VERSION;
     header.address_bits = CVM_ADDRESS_BITS;
     header.byte_order = CVM_BYTE_ORDER_LITTLE;
@@ -781,6 +793,11 @@ int main(int argc, char **argv)
         if ((base & (PAGE_ALIGNMENT - 1)) != 0)
             fputs("cvmlink: --base must be page-aligned\n", stderr);
         usage(argv[0]);
+        return 2;
+    }
+    if (!has_exf_extension(output_path)) {
+        fputs("cvmlink: RISC-VM executables require the .exf extension\n",
+              stderr);
         return 2;
     }
 

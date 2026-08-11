@@ -1,11 +1,13 @@
-# Clang/LLVM CVM 크로스 컴파일 경로
+# Clang/LLVM RISC-VM 크로스 컴파일 경로
 
-`cvmir`는 LLVM 22의 공식 IR parser와 verifier를 사용하고 CVM ABI v1
+레거시 이름의 `cvmir`는 LLVM 22의 공식 IR parser와 verifier를 사용하고
+RISC-VM ABI v1
 어셈블리 또는 `CVMOBJ2` 오브젝트를 생성하는 assembly bridge다. LLVM 문법을
-프로젝트가 다시 해석하지 않으며, CVM instruction selection과 stack frame,
+프로젝트가 다시 해석하지 않으며, RISC-VM instruction selection과 stack frame,
 데이터 배치만 담당한다.
 
-`cvmclang.ps1`은 Clang 호출, CVM target 정규화, `cvmir`, `vmasm`, `cvmlink`,
+`cvmclang.ps1`은 Clang 호출, RISC-VM target 정규화, legacy 이름의 `cvmir`,
+`vmasm`, `cvmlink`,
 `crt0.o`와 `libcvm.a` 연결을 묶는 freestanding C driver다.
 
 ## 개발 도구 설치
@@ -36,17 +38,17 @@ llvm-config --version
 현재 검증 기준은 Clang/LLVM 22.1.8이다. `build.ps1`은 `llvm-config`가 없거나
 22.x가 아니거나 개발 헤더가 없으면 진단 후 중단한다.
 
-## CVM target 규격
+## RISC-VM target 규격
 
 ```text
-target triple = "cvm64-unknown-none"
+target triple = "riscvm64-unknown-none"
 target datalayout = "e-p:64:64-i8:8-i16:16-i32:32-i64:64-f32:32-f64:64-v128:128-a:0:64-n8:16:32:64-S128"
 ```
 
-설치된 Clang에는 아직 upstream CVM TargetInfo가 없으므로 driver는
+설치된 Clang에는 아직 upstream RISC-VM TargetInfo가 없으므로 driver는
 `x86_64-unknown-none-elf`의 LP64 frontend 규칙과 `-mlong-double-64`를 사용해
 IR을 만든다. 그 뒤 triple과 DataLayout을 위 값으로 정규화한다. 이 호환
-profile은 CVM ABI v1의 정수·포인터 크기, 자연 정렬, signed `char`, 32비트
+profile은 RISC-VM ABI v1의 정수·포인터 크기, 자연 정렬, signed `char`, 32비트
 `wchar_t`, 64비트 `long double`과 일치한다. packed 구조체와 bit-field는 ABI
 v1 범위 밖이다.
 
@@ -68,13 +70,13 @@ C 소스에서 오브젝트를 만든다.
 소스에는 `main`이 있어야 한다.
 
 ```powershell
-.\build\tools\cvmclang.ps1 program.c -o program.cvm
+.\build\tools\cvmclang.ps1 program.c -o program.exf
 ```
 
 커널처럼 시작 코드와 entry를 직접 지정할 수도 있다.
 
 ```powershell
-.\build\tools\cvmclang.ps1 kernel.c -o kernel.cvm `
+.\build\tools\cvmclang.ps1 kernel.c -o kernel.exf `
     -Startup kernel_start.s -Entry kernel_entry -Base 0x10000
 ```
 
@@ -95,12 +97,12 @@ LLVM IR을 직접 변환하는 저수준 명령은 다음과 같다.
 - 직접 함수 호출, scalar register/stack argument, void/scalar return
 - variadic 호출에서 unnamed argument의 stack 전달
 - Clang의 `sret` hidden pointer처럼 IR에 명시된 pointer parameter
-- weak/common/external symbol과 CVM relocation
+- weak/common/external symbol과 `CVMOBJ2` relocation
 - `<cvm/intrin.h>`로 노출되는 CPU 제어·상태 조회·64비트 원자 명령
 
 각 SSA 값은 정확성 우선으로 8바이트 stack slot에 spill한다. R14를 frame
 pointer로 사용하고 CALL 직전 SP를 16바이트로 정렬한다. `cvmclang`은 현재
-`-O0`을 사용한다. 최적화 IR은 i65 같은 CVM 비정규 정수 폭을 만들 수 있으므로
+`-O0`을 사용한다. 최적화 IR은 i65 같은 RISC-VM 비정규 정수 폭을 만들 수 있으므로
 legalization pass가 생기기 전에는 기본 경로로 사용하지 않는다.
 
 아직 지원하지 않는 범위는 floating/vector IR, `switch`, indirect call,
@@ -111,7 +113,7 @@ LLVM memory intrinsic, aggregate SSA return, 동적 `alloca`, variadic 함수 �
 ## CPU intrinsic
 
 `<cvm/intrin.h>`는 일반 함수처럼 호출하지만 `cvmir`가 외부 심볼 호출이 아닌
-단일 CVM 명령으로 직접 내린다. 따라서 별도 런타임 구현이나 링크 심볼이
+단일 RISC-VM 명령으로 직접 내린다. 따라서 별도 런타임 구현이나 링크 심볼이
 필요하지 않다.
 
 - 실행 제어: `cvm_halt`, `cvm_nop`, `cvm_wait`, `cvm_fence`
@@ -152,9 +154,9 @@ build/sysroot/
 않는다. 커널에서는 `cvm/mmio.h`의 volatile load/store helper로 MMIO 장치를
 접근할 수 있다.
 
-## backend 결정
+## 현재 backend 선택
 
-P0는 LLVM IR→기존 CVM assembler/object/linker bridge를 정식 경로로 선택한다.
-LLVM MC/object writer, LLD와 native CVM backend 포팅은 bridge의 ABI 회귀 결과를
-기준으로 별도 진행한다. 즉 현재 경로는 임시 hand-written IR parser가 아니지만,
-LLVM 자체의 native code generator도 아니다.
+현재 정식 경로는 LLVM IR에서 레거시 이름의 RISC-VM
+assembler/object/linker로 이어지는 bridge다. LLVM MC/object writer, LLD와
+native RISC-VM backend 포팅은 장기 검토 항목이다. 즉 현재 경로는 임시
+hand-written IR parser가 아니지만 LLVM 자체의 native code generator도 아니다.

@@ -559,12 +559,12 @@ static int write_fat32(FILE *file,
                              FAT_ROOT_CLUSTER,
                              0);
         make_directory_entry(directory + 64,
-                             "BOOT    CVM",
+                             "BOOT    EXF",
                              0x20,
                              FAT_BOOTLOADER_CLUSTER,
                              (uint32_t)bootloader_size);
         make_directory_entry(directory + 96,
-                             "KERNEL  CVM",
+                             "KERNEL  EXF",
                              0x20,
                              layout->kernel_first_cluster,
                              (uint32_t)kernel_size);
@@ -1174,14 +1174,14 @@ CvmDiskStatus cvm_disk_image_inspect(const char *path,
                       cluster_bytes) ||
         !find_directory_entry(directory,
                               cluster_bytes,
-                              "BOOT    CVM",
+                              "BOOT    EXF",
                               0x20,
                               &bootloader_cluster,
                               &bootloader_size) ||
         bootloader_size == 0 ||
         !find_directory_entry(directory,
                               cluster_bytes,
-                              "KERNEL  CVM",
+                              "KERNEL  EXF",
                               0x20,
                               &kernel_cluster,
                               &kernel_size) ||
@@ -1190,7 +1190,7 @@ CvmDiskStatus cvm_disk_image_inspect(const char *path,
         free(fat);
         status = disk_fail(CVM_DISK_KERNEL_NOT_FOUND,
                            error, error_size,
-                           "BOOT/BOOT.CVM or KERNEL.CVM is missing");
+                           "BOOT/BOOT.EXF or KERNEL.EXF is missing");
         goto done;
     }
     free(directory);

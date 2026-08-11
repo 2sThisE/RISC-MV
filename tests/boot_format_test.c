@@ -15,11 +15,11 @@ static uint8_t *make_kernel_image(size_t *image_size)
 
     CvmKernelHeader header;
     memset(&header, 0, sizeof(header));
-    memcpy(header.magic, CVM_KERNEL_MAGIC, 8);
+    memcpy(header.magic, RISC_VM_EXF_MAGIC, 8);
     header.format_major = CVM_KERNEL_FORMAT_MAJOR;
     header.format_minor = CVM_KERNEL_FORMAT_MINOR;
     header.header_size = CVM_KERNEL_HEADER_SIZE;
-    header.isa_id = CVM_ISA_ID;
+    header.isa_id = RISC_VM_ISA_ID;
     header.isa_version = CVM_ISA_VERSION;
     header.address_bits = CVM_ADDRESS_BITS;
     header.byte_order = CVM_BYTE_ORDER_LITTLE;
@@ -67,6 +67,27 @@ static void test_kernel_image(void)
     assert(header.entry_physical_address == 0x1000);
     assert(header.segment_count == 1);
 
+    memcpy(image, "CVMKERN1", 8);
+    assert(cvm_kernel_image_validate(image,
+                                     image_size,
+                                     NULL,
+                                     error,
+                                     sizeof(error)) ==
+           CVM_BOOT_FORMAT_BAD_MAGIC);
+    memcpy(image, RISC_VM_EXF_MAGIC, 8);
+
+    CvmKernelHeader valid_header = header;
+    header.isa_id = UINT32_C(0x314D5643); /* legacy "CVM1" */
+    cvm_kernel_header_encode(image, &header);
+    assert(cvm_kernel_image_validate(image,
+                                     image_size,
+                                     NULL,
+                                     error,
+                                     sizeof(error)) ==
+           CVM_BOOT_FORMAT_UNSUPPORTED);
+    cvm_kernel_header_encode(image, &valid_header);
+    header = valid_header;
+
     CvmKernelSegment segment;
     cvm_kernel_segment_decode(image + header.segment_table_offset, &segment);
     assert(segment.file_size == 4);
@@ -102,12 +123,12 @@ static void test_relocatable_kernel_image(void)
     assert(image != NULL);
 
     CvmKernelHeader header = {0};
-    memcpy(header.magic, CVM_KERNEL_MAGIC, 8);
+    memcpy(header.magic, RISC_VM_EXF_MAGIC, 8);
     header.format_major = CVM_KERNEL_FORMAT_MAJOR;
     header.format_minor = CVM_KERNEL_FORMAT_MINOR;
     header.header_size = CVM_KERNEL_HEADER_SIZE;
     header.flags = CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL;
-    header.isa_id = CVM_ISA_ID;
+    header.isa_id = RISC_VM_ISA_ID;
     header.isa_version = CVM_ISA_VERSION;
     header.address_bits = CVM_ADDRESS_BITS;
     header.byte_order = CVM_BYTE_ORDER_LITTLE;

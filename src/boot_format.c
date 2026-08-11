@@ -264,42 +264,43 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
     }
     if (image_size < CVM_KERNEL_HEADER_SIZE) {
         return fail(CVM_BOOT_FORMAT_TRUNCATED,
-                    error, error_size, "kernel header is truncated");
+                    error, error_size, "EXF header is truncated");
     }
 
     CvmKernelHeader header;
     cvm_kernel_header_decode(image, &header);
-    if (memcmp(header.magic, CVM_KERNEL_MAGIC, 8) != 0) {
+    if (memcmp(header.magic, RISC_VM_EXF_MAGIC, 8) != 0) {
         return fail(CVM_BOOT_FORMAT_BAD_MAGIC,
-                    error, error_size, "invalid kernel magic");
+                    error, error_size, "invalid RISC-VM EXF magic");
     }
     if (header.format_major != CVM_KERNEL_FORMAT_MAJOR ||
         header.format_minor > CVM_KERNEL_FORMAT_MINOR) {
         return fail(CVM_BOOT_FORMAT_UNSUPPORTED,
-                    error, error_size, "unsupported kernel format version");
+                    error, error_size, "unsupported EXF format version");
     }
     if (header.header_size != CVM_KERNEL_HEADER_SIZE ||
         header.segment_entry_size != CVM_KERNEL_SEGMENT_SIZE ||
         header.segment_count == 0 ||
         header.segment_count > CVM_KERNEL_MAX_SEGMENTS) {
         return fail(CVM_BOOT_FORMAT_BAD_LAYOUT,
-                    error, error_size, "invalid kernel table dimensions");
+                    error, error_size, "invalid EXF table dimensions");
     }
     uint64_t known_flags = CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL;
-    if ((header.flags & ~known_flags) != 0 || header.isa_id != CVM_ISA_ID ||
+    if ((header.flags & ~known_flags) != 0 ||
+        header.isa_id != RISC_VM_ISA_ID ||
         header.isa_version != CVM_ISA_VERSION ||
         header.address_bits != CVM_ADDRESS_BITS ||
         header.byte_order != CVM_BYTE_ORDER_LITTLE) {
         return fail(CVM_BOOT_FORMAT_UNSUPPORTED,
-                    error, error_size, "kernel requires an unsupported ABI");
+                    error, error_size, "EXF requires an unsupported RISC-VM ABI");
     }
     if (!all_zero(header.reserved, sizeof(header.reserved))) {
         return fail(CVM_BOOT_FORMAT_UNSUPPORTED,
-                    error, error_size, "reserved kernel header bytes are set");
+                    error, error_size, "reserved EXF header bytes are set");
     }
     if (header.image_file_size != (uint64_t)image_size) {
         return fail(CVM_BOOT_FORMAT_BAD_LAYOUT,
-                    error, error_size, "kernel file size does not match header");
+                    error, error_size, "EXF file size does not match header");
     }
     if (header.segment_table_offset < CVM_KERNEL_HEADER_SIZE ||
         (header.segment_table_offset & UINT64_C(7)) != 0 ||
@@ -329,14 +330,14 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
         sizeof(uint32_t));
     if (header.header_crc32 != expected_header_crc) {
         return fail(CVM_BOOT_FORMAT_BAD_CHECKSUM,
-                    error, error_size, "kernel header CRC32 mismatch");
+                    error, error_size, "EXF header CRC32 mismatch");
     }
     uint32_t expected_payload_crc = cvm_crc32(
         image + CVM_KERNEL_HEADER_SIZE,
         image_size - CVM_KERNEL_HEADER_SIZE);
     if (header.payload_crc32 != expected_payload_crc) {
         return fail(CVM_BOOT_FORMAT_BAD_CHECKSUM,
-                    error, error_size, "kernel payload CRC32 mismatch");
+                    error, error_size, "EXF payload CRC32 mismatch");
     }
 
     int relocatable =

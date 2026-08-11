@@ -1,4 +1,4 @@
-# VM 어셈블러 (`vmasm`)
+# RISC-VM 어셈블러 (`vmasm`)
 
 `vmasm`은 이 프로젝트의 독자 ISA를 위한 C11 2-pass 어셈블러다. 첫 번째 패스에서 레이블 주소를 정하고 두 번째 패스에서 바이트를 생성하므로, 아직 선언되지 않은 앞쪽 레이블도 분기·호출 피연산자로 사용할 수 있다.
 
@@ -34,11 +34,11 @@ vmasm INPUT.asm -o OUTPUT.bin [--base ADDRESS]
 
 ```powershell
 .\build\tools\vmasm.exe source.s -c -o source.o
-.\build\tools\cvmlink.exe source.o support.o -o KERNEL.CVM `
+.\build\tools\cvmlink.exe source.o support.o -o KERNEL.EXF `
     --base 0x10000 --entry kernel_entry --map kernel.map
 ```
 
-`.cvm`은 표준 오브젝트 확장자가 아니라 이 VM 플랫폼의 실행/부팅 이미지
+`.exf`는 RISC-VM 플랫폼의 정식 실행/부팅 이미지
 확장자다. 정적 라이브러리는 통상 관례대로 `.a`를 사용하며 `cvmar`로 만든다.
 자세한 사용법은 [STATIC_LIBRARY.md](STATIC_LIBRARY.md)를 참고한다.
 
@@ -79,7 +79,7 @@ finish:
 `.extern`, `.weak`, `.type`, `.size`, `.comm`, `.entry`를 지원한다.
 `cvmlink`는 여러 `.o`의 전역 심볼을 해석하고 로컬
 심볼을 오브젝트별로 격리한 뒤 실제 바이너리 재배치를 적용하고, 각 섹션을
-4KiB 정렬된 RX/R/RW/RW `CVMKERN1` 세그먼트로 만든다. `.o`에는 소스가
+4KiB 정렬된 RX/R/RW/RW `RVMEXF01` 세그먼트로 만든다. `.o`에는 소스가
 아니라 기계어 바이트, 심볼 값, 재배치 표가 저장된다. `.bss`는 메모리 크기만
 가지며 파일에는 제로 바이트를 저장하지 않는다. 중복 전역, 미해결 외부 심볼,
 재배치 overflow, 실행 불가능한 엔트리는 오류다. 세부 포맷은

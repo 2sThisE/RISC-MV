@@ -1,11 +1,12 @@
-# CVM 링커
+# RISC-VM 링커 (`cvmlink`)
 
-`cvmlink`는 재배치 가능한 CVM 오브젝트를 부팅 가능한 커널 이미지로 묶는다.
+레거시 이름의 `cvmlink`는 재배치 가능한 오브젝트를 RISC-VM EXF 이미지로
+묶는다.
 
 ```powershell
 .\build\tools\vmasm.exe kernel.s -c -o kernel.o
 .\build\tools\cvmlink.exe kernel.o support.o `
-    -o KERNEL.CVM --base 0x40000000 --physical-relocatable `
+    -o KERNEL.EXF --base 0x40000000 --physical-relocatable `
     --map kernel.map
 ```
 
@@ -14,12 +15,12 @@
 
 ```powershell
 .\build\tools\cvmar.exe create libsupport.a support.o
-.\build\tools\cvmlink.exe kernel.o libsupport.a -o KERNEL.CVM
+.\build\tools\cvmlink.exe kernel.o libsupport.a -o KERNEL.EXF
 ```
 
 파일 이름은 일반 도구 체인 관례를 따른다. `.s`는 어셈블리 소스, `.o`는
-재배치 오브젝트이며 `.a`는 향후 정적 라이브러리용으로 예약한다. `.cvm`은
-플랫폼 전용 실행/부팅 이미지다. 기존 고정 주소 경로는 `.asm`에서 `.bin`을
+재배치 오브젝트이며 `.a`는 정적 라이브러리다. `.exf`는
+RISC-VM 전용 실행/부팅 이미지다. 기존 고정 주소 경로는 `.asm`에서 `.bin`을
 계속 지원한다.
 
 링커는 `.text` (`r-x`), `.rodata` (`r--`), `.data` (`rw-`), `.bss`

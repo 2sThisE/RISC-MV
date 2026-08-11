@@ -1,8 +1,17 @@
-# Computer VM
+# RISC-VM
 
-독자 ISA를 실행하는 가상 CPU/컴퓨터 프로젝트다. 64비트 정수, SIMD와
+RISC-VM 아키텍처를 실행하는 가상 CPU/컴퓨터 프로젝트다. 64비트 정수, SIMD와
 부동소수점, MMU·예외·멀티코어, 동적 VIO 장치와 GPT/FAT32 부팅을
 지원한다.
+
+정식 실행파일 포맷은 `.exf`(RISC-VM Executable File v1)다. 기존 `.cvm`
+실행파일은 지원하지 않는다. `Cvm*`, `CVM_*`, `cvmclang` 같은 이름은 기존
+소스와 도구의 레거시 명칭으로 유지되지만 새 실행파일은 `RVMEXF01` magic과
+`RVM1` ISA ID만 사용한다.
+
+자체 C 컴파일러 `cvmcc`는 지원과 유지보수가 종료됐으며 기본 빌드에서
+생성하지 않는다. 소스와 기존 테스트만 현재 상태로 보존한다. 지원되는 C
+경로는 Clang 22와 `cvmclang.ps1`/`cvmir` bridge다.
 
 ## 소스 구조
 
@@ -22,7 +31,7 @@ computer/
 │  ├─ hello/                    UART 출력 예제
 │  ├─ keyboard/                 keyboard 예제
 │  ├─ linker/                   다중 오브젝트 링크 예제
-│  ├─ llvm_ir/                  LLVM IR→CVM 변환 예제
+│  ├─ llvm_ir/                  LLVM IR→RISC-VM 변환 예제
 │  └─ syscall/                  system call 예제
 ├─ devices/
 │  ├─ block/
@@ -111,7 +120,7 @@ build/
 │  ├─ lst/                      assembler listing
 │  └─ sym/                      symbol/map 파일
 ├─ modules/                     장치 DLL과 설정 자동 복사 위치
-└─ sysroot/                     CVM headers, crt0.o, libcvm.a
+└─ sysroot/                     legacy CVM-named headers, crt0.o, libcvm.a
 ```
 
 ## 실행 예시
@@ -131,7 +140,7 @@ build/
 1,048,576 byte를 할당한다.
 
 부팅 예제는 ROM에서 시작해 VIO block device의 GPT/FAT32 파티션에서
-`BOOT.CVM`과 `KERNEL.CVM`을 읽는다. reference kernel은 BootInfo, PMM,
+`BOOT.EXF`와 `KERNEL.EXF`를 읽는다. reference kernel은 BootInfo, PMM,
 MMU, VBR, W^X와 page-fault 복구를 검사하고 성공하면 UART에
 `KERNEL: READY`를 출력한다.
 
@@ -139,6 +148,10 @@ MMU, VBR, W^X와 page-fault 복구를 검사하고 성공하면 UART에
 생성된다. 설정이 필수인 block 장치는 `.conf`도 자동 생성되며, boot 예제를
 함께 빌드하면 생성된 `system.img`를 쓰기 가능으로 연결하도록 갱신된다.
 reference kernel의 FAT32 자체 검사는 `/BOOT/KTEST.TXT`를 생성·교체한다.
+파일 내용은 고정된 읽기/쓰기 회귀 표식이며 부팅이 끝나도 자동 삭제하지
+않는다.
 
 세부 규격은 `docs/system`, `docs/boot`, `docs/devices`, `docs/tools`,
 `docs/examples`, `docs/kernel`, `docs/tests` 아래에서 분류별로 확인할 수 있다.
+아키텍처 명칭과 레거시 호환 정책은
+[RISC_VM.md](docs/system/RISC_VM.md)에 정리되어 있다.

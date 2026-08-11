@@ -1,9 +1,9 @@
-; CVM Boot ROM v1.
+; RISC-VM Boot ROM v1.
 ;
 ; Reset address: 0x0000007FFFF00000
 ; Required RAM: 1 MiB or more
-; Disk path: VIO storage -> GPT -> CVM Boot partition -> FAT32
-; Second-stage path: /BOOT/BOOT.CVM
+; Disk path: VIO storage -> GPT -> RISC-VM Boot partition -> FAT32
+; Second-stage path: /BOOT/BOOT.EXF
 ;
 ; Low RAM firmware layout:
 ;   0x1000..0x11FF  private state
@@ -12,7 +12,7 @@
 ;   0x7000..0x7008  absolute-jump trampoline
 ;   0xF000          downward-growing firmware stack top
 ;   0x18000..0x181FF read-only FAT sector cache
-;   0x40000..       first-stage BOOT.CVM staging (reused after handoff)
+;   0x40000..       first-stage BOOT.EXF staging (reused after handoff)
 
 .entry boot
 
@@ -73,7 +73,7 @@ boot:
     MOVI32U R3, 0x1000
     STORE64O R3, R0, 0x100
 
-    ; Locate BOOT.CVM in BOOT.
+    ; Locate BOOT.EXF in BOOT.
     CALLREL read_cluster
     CMPI32 R0, 0
     BRCC EQ, error_io
@@ -381,8 +381,8 @@ read_cluster_fail:
     MOVI32U R0, 0
     RET
 
-; R0=directory base, R1=size, R2=0 for BOOT dir, 1 for BOOT.CVM,
-; or 2 for KERNEL.CVM.
+; R0=directory base, R1=size, R2=0 for BOOT dir, 1 for BOOT.EXF,
+; or 2 for KERNEL.EXF.
 ; Returns R0=cluster, R1=file size. R0=0 means not found.
 find_directory_entry:
     MOVI32U R3, 0
@@ -421,7 +421,7 @@ find_directory_file:
     BRCC NE, find_directory_next
     LOAD32UO R6, R4, 8
     ANDI32 R6, 0x00FFFFFF
-    CMPI32 R6, 0x004D5643          ; "CVM"
+    CMPI32 R6, 0x00465845          ; "EXF"
     BRCC NE, find_directory_next
     TESTI32 R5, 0x10
     BRCC NE, find_directory_next
@@ -433,7 +433,7 @@ find_directory_kernel:
     BRCC NE, find_directory_next
     LOAD32UO R6, R4, 8
     ANDI32 R6, 0x00FFFFFF
-    CMPI32 R6, 0x004D5643
+    CMPI32 R6, 0x00465845
     BRCC NE, find_directory_next
     TESTI32 R5, 0x10
     BRCC NE, find_directory_next
@@ -576,12 +576,12 @@ stage_kernel_last_eoc_fail:
     HALT
 
 ; ---------------------------------------------------------------------------
-; CVM kernel image validation and loading
+; RISC-VM EXF validation and loading
 
 validate_kernel:
     MOVI32U R3, 0x40000
     LOAD64 R4, R3
-    MOVI64 R5, 0x314E52454B4D5643 ; "CVMKERN1"
+    MOVI64 R5, 0x31304658454D5652 ; "RVMEXF01"
     CMP R4, R5
     BRCC NE, validate_kernel_fail
     LOAD16UO R4, R3, 0x08
@@ -597,7 +597,7 @@ validate_kernel:
     CMPI32 R4, 0
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x18
-    MOVI32U R5, 0x314D5643
+    MOVI32U R5, 0x314D5652        ; "RVM1"
     CMP R4, R5
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x1C
@@ -1555,40 +1555,40 @@ fatal:
     HALT
 
 message_start:
-    .asciz "CVM ROM: start\n"
+    .asciz "RISC-VM ROM: start\n"
 message_handoff:
-    .asciz "CVM ROM: bootloader\n"
+    .asciz "RISC-VM ROM: bootloader\n"
 message_ram:
-    .asciz "CVM ROM E01: RAM requires 1 MiB\n"
+    .asciz "RISC-VM ROM E01: RAM requires 1 MiB\n"
 message_device:
-    .asciz "CVM ROM E02: no VIO block device\n"
+    .asciz "RISC-VM ROM E02: no VIO block device\n"
 message_gpt:
-    .asciz "CVM ROM E03: invalid GPT\n"
+    .asciz "RISC-VM ROM E03: invalid GPT\n"
 message_gpt_header_crc:
-    .asciz "CVM ROM E03A: GPT header CRC\n"
+    .asciz "RISC-VM ROM E03A: GPT header CRC\n"
 message_gpt_entries_crc:
-    .asciz "CVM ROM E03B: GPT entries CRC\n"
+    .asciz "RISC-VM ROM E03B: GPT entries CRC\n"
 message_fat:
-    .asciz "CVM ROM E04: invalid FAT32\n"
+    .asciz "RISC-VM ROM E04: invalid FAT32\n"
 message_io:
-    .asciz "CVM ROM E05: block read failed\n"
+    .asciz "RISC-VM ROM E05: block read failed\n"
 message_bootdir:
-    .asciz "CVM ROM E06: BOOT directory missing\n"
+    .asciz "RISC-VM ROM E06: BOOT directory missing\n"
 message_kernel_file:
-    .asciz "CVM ROM E07: BOOT.CVM missing\n"
+    .asciz "RISC-VM ROM E07: BOOT.EXF missing\n"
 message_chain:
-    .asciz "CVM ROM E08: invalid FAT chain\n"
+    .asciz "RISC-VM ROM E08: invalid FAT chain\n"
 message_chain_ram:
-    .asciz "CVM ROM E08A: staging exceeds RAM\n"
+    .asciz "RISC-VM ROM E08A: staging exceeds RAM\n"
 message_chain_io:
-    .asciz "CVM ROM E08B: kernel read failed\n"
+    .asciz "RISC-VM ROM E08B: kernel read failed\n"
 message_chain_next:
-    .asciz "CVM ROM E08C: FAT lookup failed\n"
+    .asciz "RISC-VM ROM E08C: FAT lookup failed\n"
 message_chain_early:
-    .asciz "CVM ROM E08D: early end of chain\n"
+    .asciz "RISC-VM ROM E08D: early end of chain\n"
 message_chain_last:
-    .asciz "CVM ROM E08E: missing end of chain\n"
+    .asciz "RISC-VM ROM E08E: missing end of chain\n"
 message_kernel:
-    .asciz "CVM ROM E09: invalid BOOT.CVM image\n"
+    .asciz "RISC-VM ROM E09: invalid BOOT.EXF image\n"
 message_bootinfo:
-    .asciz "CVM ROM E10: cannot build BootInfo\n"
+    .asciz "RISC-VM ROM E10: cannot build BootInfo\n"

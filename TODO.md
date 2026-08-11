@@ -1,118 +1,286 @@
-# TODO
+# RISC-VM 개발 로드맵
 
-현재 ISA, ABI v1.0, 재배치 오브젝트, 링커와 정적 라이브러리를 기준으로 한
-후속 작업 목록이다. 완료된 기능을 반복해서 적지 않고 보강·추가할 항목만
-우선순위순으로 관리한다.
+이 문서는 현재 구현 상태에서 실제로 남은 작업을 선행 관계와 위험도 순으로
+관리한다. 완료된 세부 작업의 전체 이력보다는 현재 기준점, 다음 구현 단계와
+각 단계의 완료 조건을 기록한다.
 
-## P0 — Clang/LLVM CVM 크로스 컴파일 경로 — 완료
+우선순위 표기는 다음과 같다.
 
-- [x] 개발 호스트 Clang 22.1.8 탐지와 실제 생성 IR bootstrap 회귀 경로
-- [x] MSYS2 UCRT64 LLVM/Clang 개발 도구를 22.1.8로 통일하고 PATH 확인
-- [x] 재현 가능한 LLVM 개발 도구 설치 절차 문서 작성
-- [x] `cvm64-unknown-none` target triple과 CVM LLVM DataLayout v1 확정
-- [x] `cvmir`: LLVM 22 공식 IR parser/verifier와 진단·테스트 골격
-- [x] `cvmir`: 정수 함수 인자, 산술, 반환을 CVM ABI 어셈블리로 변환
-- [x] `cvmir`: i1/i8/i16/i32/i64 산술·비교·조건/무조건 분기
-- [x] Clang 22 최적화 IR의 `select`와 `tail/musttail/notail call` 수용
-- [x] `cvmir`: 8개 이하 정수 인자의 직접 함수 호출과 재배치 오브젝트
-- [x] `cvmir`: 정수 `trunc`/`zext`/`sext` cast
-- [x] `cvmir`: alloca/load/store, 포인터, GEP, PHI와 전역 데이터
-- [x] scalar stack argument, 명시적 sret pointer와 variadic caller stack 규약
-- [x] `cvmclang`: Clang→IR→`cvmir`→`vmasm`/`cvmlink` driver
-- [x] Clang 22 호환 target profile: LP64, 정렬, macro, `long double=64`
-- [x] P0 코드 생성 경로를 LLVM parser 기반 assembly bridge로 확정
-- [x] CVM sysroot, `crt0.o`, 기본 stack, builtins와 `libcvm.a`
-- [x] 실제 Clang 22 생성 i64 IR→CVM 기계어→VM 실행 bootstrap 검증
-- [x] 정규화된 `cvm64` Clang IR, 메모리 커널과 기본 runtime 링크 회귀 테스트
+- `P0`: 빌드, 부팅 또는 데이터 안전성을 막는 즉시 수정 항목
+- `P1`: 현재 주력 단계. 사용자 프로그램을 실행하는 운영체제 기반
+- `P2`: 도구체인, 성능, 개발 편의성 고도화
+- `P3`: 장기 운영체제 기능과 셀프호스팅
 
-P0의 완료 기준은 freestanding 정수·포인터 C 커널 기반이다. float/vector IR,
-variadic callee의 `va_start/va_arg`, aggregate SSA return과 native 최적화 backend는
-P2 고도화 대상으로 분리한다.
+## 현재 기준점 — 완료
 
-## P1 — 커널의 C 전환과 운영체제 기반
+### RISC-VM 아키텍처와 가상 하드웨어
 
-- [x] CPU 제어·상태 조회·원자 연산용 `<cvm/intrin.h>`와 `cvmir` 직접 lowering
-- [x] C/assembly 혼합 링크, 전체 section 경계와 심볼 기반 bootstrap stack
-- [x] 커널 entry에서 C 호출 경계를 세우고 BootInfo/CRC32/early UART를 C로 이전
-- [x] kernel entry·예외 레지스터 저장·IRET·fault probe만 assembly 경계로 정리
-- [x] UART, PMM, MMU, VBR와 page-fault/예외 정책을 C로 이전
+- [x] 독자 64-bit little-endian ISA와 256개 opcode 공간
+- [x] 정수, 부호 연산, 분기, call/return, atomic/fence, float와 SIMD 기초
+- [x] privilege mode, MMU, page table, 예외, VBR, syscall과 interrupt return
+- [x] timer, IRQ controller, IPI, core-control과 가상 multicore/hardware-thread
+- [x] RAM/ROM/MMIO bus, VIO hub와 동적 장치 module ABI
+- [x] UART, block, keyboard와 XRGB8888 framebuffer display 장치
 
-### P1.1 — 고정 부트 메모리 경계 제거
+### 부팅과 실행 포맷
 
-- [x] `0x20000..0x30000`을 부트로더 코드/stack 슬롯으로 예약하고 커널을
-  `0x30000`부터 RAM의 높은 주소 방향으로 확장하도록 재배치
-- [x] 부트로더의 고정 커널 상한 `0x20000`을 제거하고 커널 끝을 실제 RAM 및
-  동적 staging 시작 주소와 비교하도록 변경
-- [x] Firmware FileSize 결과를 4KiB로 올림 정렬하고 staging buffer를 RAM
-  상단에서 동적으로 선택
-- [x] BootInfo map에서 부트로더 슬롯은 reclaimable, 커널은 KERNEL, staging은
-  handoff 이후 usable이 되도록 정렬된 구간 유지
-- [x] 커널의 고정 가상주소, 동적 물리주소, 가상 entry와 초기 PTBR을 표현하는
-  boot image/BootInfo handoff 필드 및 검증 규칙 확정
-- [x] 부트로더가 임시 페이지 테이블을 만들고 MMU ON/OFF 두 진입 방식을
-  `CVM_BOOTINFO_FLAG_MMU_ENABLED`로 구분하도록 구현
-- [x] 전체 물리 RAM direct-map을 정의하고 PMM의 물리주소 직접 포인터 변환을
-  `phys_to_virt`/`virt_to_phys` 계층으로 교체
-- [x] 커널이 임시 페이지 테이블을 인수하거나 자체 테이블로 교체한 뒤
-  부트로더·staging·임시 page-table 페이지를 PMM에 회수
-- [x] 작은 RAM, 조각난 memory map, staging/목적지 충돌, 정렬 경계, 잘못된
-  segment 크기와 MMU ON handoff를 포함하는 부팅 회귀 테스트 추가
+- [x] Boot ROM -> `BOOT.EXF` -> `KERNEL.EXF` 2단계 부팅
+- [x] GPT/FAT32 가상디스크와 firmware service/BootInfo handoff
+- [x] 고정 kernel VA, 동적 물리 배치, RAM direct-map과 MMU-on 진입
+- [x] 임시 page table과 bootloader/staging 메모리의 kernel 회수
+- [x] RISC-VM EXF v1: `.exf`, `RVMEXF01`, `RVM1`
+- [x] 기존 `CVMKERN1`, `CVM1`, `.cvm` 실행파일 비호환 처리
+- [x] FAT cache, FSInfo next-free hint, 연속 sector batch I/O와 event 기반 host
+  block worker
 
-### P1.2 — 운영체제 런타임 기반
+### 빌드와 도구체인
 
-- [x] 커널 heap과 기본 자료구조 구현
-- [x] 사용자 주소 공간과 CVM 실행 이미지 loader 구현
-- [x] syscall dispatcher와 사용자 포인터 검증 구현
-- [x] 선점 가능한 스케줄러와 문맥 교환 구현
-- [x] VFS, FAT32 읽기/쓰기와 block-device 커널 드라이버 구현
-- [x] UART/키보드/디스플레이 드라이버를 커널 장치 계층에 연결
+- [x] assembler, relocatable `.o`, linker, static `.a`와 archive 추출
+- [x] 다중 `.text/.rodata/.data/.bss` segment와 W^X EXF 생성
+- [x] ABI v1.0, LP64, 16-byte stack alignment와 scalar stack argument
+- [x] Clang 22 -> LLVM IR -> `cvmir` -> object/linker cross-build 경로
+- [x] `riscvm64-unknown-none` triple, sysroot, `crt0.o`, builtins와 `libcvm.a`
+- [x] 전체 build script, 35-suite test runner와 실제 boot 회귀 경로
 
-### P1.3 — 프로세스와 사용자 공간 확장
+### reference kernel P1.2
 
-- 프로세스별 file descriptor table과 `open`/`close`/`seek` syscall
-- sleep/wakeup, wait/child 종료 수거와 프로세스 수명 관리
-- user page fault를 커널 panic 대신 해당 프로세스 종료/신호로 전달
-- FAT32 long-file-name, 하위 디렉터리 생성·삭제와 동시 접근 잠금
-- block 완료 IRQ를 scheduler sleep/wakeup에 연결한 비동기 kernel I/O
-- 키보드 IRQ 기반 입력 queue와 display framebuffer 사용자 API
-- 사용자 실행 파일을 VFS에서 읽어 생성하는 `exec` 경로와 초기 userland
+- [x] C kernel entry, BootInfo 검증, PMM, MMU, heap과 기본 자료구조
+- [x] 독립 user address space, EXF 검증/적재와 user/kernel 권한 분리
+- [x] syscall dispatcher와 page-aware user pointer copy/검증
+- [x] timer IRQ 기반 전체 문맥 교환과 단일 코어 선점 스케줄링
+- [x] GPT/FAT32 VFS 읽기/쓰기와 `/BOOT/KTEST.TXT` 내용 검증
+- [x] UART, block, keyboard와 display의 최소 kernel driver
 
-## P2 — 도구 체인 보강
+현재 scheduler는 고정 `KernelTask[2]` 자체 검사다. 일반 process/thread 생성,
+동적 실행, wait, file descriptor와 SMP kernel scheduler는 아직 없다.
 
-- LLVM source tree에 native `cvm64` TargetInfo와 builtin 정의 추가
-- CVM integer legalization 뒤 `-O1` 이상 최적화 IR 허용
-- LLVM native backend/MC object writer와 LLD 포팅의 비용·성능 재평가
-- float/vector IR, indirect call, switch와 memory intrinsic lowering
-- variadic callee `va_start/va_arg`와 aggregate SSA return lowering
-- `cvmar` archive 멤버 추가·교체·삭제 명령
-- 개발 빌드용 thin archive
-- `.text.*`, `.rodata.*` 같은 사용자 정의 섹션과 section garbage collection
-- COMDAT/link-once 및 심볼 visibility
-- ABS8/ABS16과 추가 PC-relative 재배치가 실제 코드 생성에 필요해질 때 확장
-- PIC, GOT/PLT, TLS와 동적 로더는 사용자 프로세스 이후 설계
-- line table, DWARF 또는 CVM 전용 디버그 정보 포맷
-- 링크 map에 로컬 심볼, 타입, 크기와 archive 출처 표시
-- 오브젝트/archive parser fuzzing과 손상 파일 table-overlap 검증 강화
-- weak/common/overflow/archive 순서 규칙을 검증하는 독립 linker 통합 테스트
+## P0 — 현재 차단 항목
 
-## ABI v2 후보 — v1과 섞지 않음
+현재 알려진 P0 차단 항목은 없다. 새 P0가 생기면 아래 P1 작업보다 먼저 해결하고
+재현 테스트를 함께 추가한다.
 
-- C bit-field의 저장 단위와 배치 규칙
-- `_Atomic` 타입과 C 메모리 순서를 ISA atomic/fence에 매핑
-- callee-saved 레지스터를 도입할지 성능 측정 후 결정
-- binary128 또는 별도 `long double` 포맷
-- 벡터 aggregate와 homogeneous floating aggregate 전달 최적화
-- stack unwinding과 예외 처리 메타데이터
+## P1.3 — 프로세스와 사용자 공간
 
-ABI v1의 기존 바이너리와 호환되지 않는 변경은 문서만 조용히 수정하지 않고
-ABI major version, 오브젝트 요구 버전과 도구 진단을 함께 올린다.
+P1.3은 아래 순서를 따른다. 뒤 단계가 앞 단계의 임시 구조를 다시 뜯지 않도록
+Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 
-## 폐기된 방향 — 자체 C 컴파일러
+### P1.3-A — Process/Thread 기반과 동적 scheduler — 다음 작업
 
-- [x] 자체 C 컴파일러 `cvmcc`의 신규 기능 개발 중단
-- `cvmcc`의 lexer, parser, AST와 코드 생성기는 완전한 C 구현으로 확장하지 않는다.
-- 기존 소스와 테스트는 ABI 및 도구 체인 회귀 참고용으로만 보존한다.
-- C 컴파일은 Clang 프런트엔드와 LLVM IR을 사용하고, CVM 쪽에서는 IR 변환기,
-  정식 backend, ABI, sysroot와 런타임 지원에 집중한다.
-- 장기 셀프 호스팅은 독자 C 컴파일러가 아니라 Clang/LLVM 자체를 CVM으로
-  빌드할 수 있는 커널·사용자 공간·표준 라이브러리 기반을 갖추는 것을 목표로 한다.
+- [ ] 고정 `KernelTask[2]`를 `KernelProcess`와 `KernelThread`로 분리
+- [ ] Process가 PID, parent, address space, FD table과 thread 목록을 소유
+- [ ] Thread가 TID, GPR/PC/FLAGS/SP, kernel stack과 scheduling 상태를 소유
+- [ ] `NEW`, `RUNNABLE`, `RUNNING`, `BLOCKED`, `ZOMBIE`, `DEAD` 상태 전이 정의
+- [ ] 고정 배열 대신 intrusive runnable queue와 동적 PID/TID 할당기 사용
+- [ ] 같은 Process의 Thread가 PTBR을 공유하고 각자 user/kernel stack을 사용
+- [ ] 주소 공간 변경 시에만 PTBR을 교체하도록 문맥 교환 경계 정리
+- [ ] `thread_create`, `thread_exit`, `yield`와 kernel 내부 생성 API 구현
+- [ ] 기존 두 user task 자체 검사를 새 구조 위에서 그대로 통과시켜 회귀 방지
+- [ ] 2개를 넘는 process와 한 process의 여러 thread를 함께 선점하는 테스트
+
+완료 조건: 고정 task 개수 없이 단일 코어에서 process와 software thread를
+동적으로 생성하고 선점할 수 있어야 한다.
+
+### P1.3-B — 수명 관리와 user fault 격리
+
+- [ ] process/thread reference와 소유 자원 해제 순서 정의
+- [ ] thread 종료와 마지막 thread 종료를 process 종료로 연결
+- [ ] parent/child 관계, exit status, zombie와 `wait`/`waitpid` 구현
+- [ ] thread `join`과 이미 종료된 대상의 즉시 수거 규칙 구현
+- [ ] orphan 처리와 중복 wait/join 방지
+- [ ] user page fault, illegal instruction과 privilege fault를 현재 process 종료로 전달
+- [ ] kernel mode fault와 손상된 kernel 상태는 기존 panic 유지
+- [ ] address space, page, EXF image, stack과 FD가 정확히 한 번 회수되는지 검사
+- [ ] 한 user process가 fault로 종료돼도 다른 process가 계속 실행되는 회귀 테스트
+
+완료 조건: 잘못된 user EXF가 kernel이나 다른 process를 종료시키지 않고 모든
+자원이 수거되어야 한다.
+
+### P1.3-C — VFS 기반 EXF `exec`와 초기 userland
+
+- [ ] VFS 경로에서 EXF 전체를 안전하게 읽는 loader API
+- [ ] `RVMEXF01`, `RVM1`, version, CRC32, segment 범위와 W^X 재검증
+- [ ] 새 Process/address space와 초기 Thread를 만든 뒤 원자적으로 runnable 등록
+- [ ] 실패 중간 단계에서 부분 생성된 page와 process를 전부 rollback
+- [ ] 초기 user stack의 `argc/argv/envp` RISC-VM ABI 정의
+- [ ] kernel이 `/BIN/INIT.EXF`를 찾아 첫 user process로 시작하는 경로
+- [ ] `vmkdisk`가 boot 파일 외 user EXF를 넣을 수 있는 manifest/input 규격
+- [ ] kernel에 내장된 user test image는 회귀 전용 fallback으로 축소
+- [ ] 손상, 잘못된 ISA, 중첩 segment와 NX 위반 EXF 실행 거부 테스트
+
+완료 조건: kernel을 다시 빌드하지 않고 가상디스크의 user EXF를 교체해 실행할
+수 있어야 한다.
+
+### P1.3-D — 프로세스별 file descriptor와 파일 syscall
+
+- [ ] VFS vnode/open-file handle과 process FD table의 소유권/참조 횟수 정의
+- [ ] FD 0/1/2를 keyboard input, UART console에 연결
+- [ ] `open`, `close`, `read`, `write`, `seek` syscall
+- [ ] 파일 offset, append/read-only 권한과 독립 open handle 규칙
+- [ ] path와 user buffer의 길이/overflow/page 권한 검증
+- [ ] 안정된 errno 값과 syscall ABI 문서화
+- [ ] process 종료와 `exec` 성공/실패 시 FD 유지·정리 규칙
+- [ ] 서로 다른 process의 FD 격리와 잘못된 FD/user pointer 회귀 테스트
+
+완료 조건: Clang으로 빌드한 user EXF가 syscall만으로 가상디스크 파일을 열고
+읽고 쓰고 닫을 수 있어야 한다.
+
+### P1.3-E — sleep/wakeup과 interrupt 기반 비동기 I/O
+
+- [ ] scheduler wait queue, wake-one/wake-all과 timeout primitive
+- [ ] timer 기반 `sleep`과 BLOCKED thread가 없을 때의 idle/WAIT 경로
+- [ ] block driver의 early-boot polling과 scheduler 이후 IRQ mode 분리
+- [ ] block 완료 IRQ에서 요청별 waiter를 깨우고 오류를 호출자에게 전달
+- [ ] keyboard IRQ ring buffer와 blocking `read`
+- [ ] interrupt context에서 할당/수면하지 않는 IRQ-safe queue와 lock 규칙
+- [ ] IRQ-before-sleep, timeout-vs-completion과 wakeup 유실 경쟁 테스트
+
+완료 조건: I/O를 기다리는 thread가 CPU를 polling하지 않고 다른 runnable
+thread가 계속 실행되어야 한다.
+
+### P1.3-F — display 사용자 API와 가변 framebuffer
+
+- [ ] host window 크기와 guest framebuffer 해상도를 분리한 mode API
+- [ ] checked `width * height * 4`, page roundup와 최대 1920x1080 검증
+- [ ] PMM contiguous allocation, scatter/gather 또는 DMA bounce 중 정책 확정
+- [ ] 해상도 변경 시 새 buffer 성공 후 이전 buffer를 교체·반환
+- [ ] process별 framebuffer mapping 권한과 사용자 `present` syscall/API
+- [ ] front/back buffer와 present-completion IRQ 기반 대기
+- [ ] 잘못된 stride, 작은 RAM, 반복 mode 변경과 process 종료 회귀 테스트
+
+완료 조건: user process가 선택한 유효 해상도로 화면을 출력하고 buffer를
+누수 없이 교체할 수 있어야 한다.
+
+### P1.3-G — FAT32/VFS 기능 확장
+
+- [ ] FAT32 long-file-name 읽기/생성/삭제
+- [ ] 하위 디렉터리 탐색, 생성과 삭제
+- [ ] `truncate`, `unlink`, `rename`과 빈 디렉터리 규칙
+- [ ] VFS와 FAT metadata/data의 동시 접근 lock
+- [ ] 부분 쓰기 실패 시 FAT chain과 directory entry 일관성 보강
+- [ ] 다중 sector/cluster, 조각난 chain과 디스크 부족 회귀 테스트
+
+완료 조건: 초기 userland가 8.3 이름 제약 없이 일반적인 디렉터리와 파일을
+안전하게 사용할 수 있어야 한다.
+
+### P1.3 전체 완료 조건
+
+- [ ] `/BIN/INIT.EXF`가 부팅 후 첫 process로 실행
+- [ ] 여러 process와 process 내부 여러 thread가 선점 실행
+- [ ] user fault가 해당 process에만 격리
+- [ ] file/keyboard/block I/O가 FD와 blocking syscall로 동작
+- [ ] process 종료 후 PMM page, heap, FD와 wait queue 누수 없음
+- [ ] 전체 unit test와 실제 GPT/FAT32 boot regression 통과
+
+## P1.4 — SMP kernel과 hardware-thread 활용
+
+P1.3은 먼저 Core 0/Thread 0에서 완성한다. 그 뒤 VM에 이미 있는 가상
+core/hardware-thread 기능을 kernel scheduler에 연결한다.
+
+- [ ] Core Control MMIO로 secondary hardware thread를 명시적으로 online
+- [ ] per-CPU current thread, kernel stack, scheduler와 interrupt 상태
+- [ ] global queue 또는 per-CPU run queue 정책과 load balancing
+- [ ] scheduler/PMM/heap/VFS/FD/device 상태의 SMP lock 계층과 순서 정의
+- [ ] IPI reschedule, stop과 TLB shootdown protocol
+- [ ] IRQ affinity/routing과 timer tick의 core별 책임
+- [ ] 같은 core의 hardware thread와 다른 core의 병렬 실행 차이 문서화
+- [ ] 2C1T, 2C2T, 최대 구성과 lock contention stress test
+
+완료 조건: 둘 이상의 가상 core가 동일 RAM과 kernel을 안전하게 공유하며 서로
+다른 runnable thread를 실제 host 병렬성으로 실행해야 한다.
+
+## P1.5 — 최소 userland와 C runtime
+
+- [ ] syscall number/header와 user용 wrapper library 분리
+- [ ] `errno`, `string`, `ctype`, 기본 `malloc/free`와 startup 종료 경로
+- [ ] FD 기반 최소 `stdio`와 line-buffered console
+- [ ] `/BIN/INIT.EXF`, 간단한 shell과 `echo`, `cat`, `ls` 수준 도구
+- [ ] user EXF와 일반 파일을 system image에 패키징하는 build manifest
+- [ ] kernel/user ABI version 불일치 진단
+
+이 단계는 ISO C/POSIX 전체 호환을 주장하지 않는다. 필요한 API를 작은 범위로
+정의하고 회귀 테스트와 함께 확장한다.
+
+## P2 — 도구체인과 개발 환경
+
+### P2-A — Clang IR 변환 범위와 최적화
+
+- [ ] indirect call, `switch`와 memory intrinsic lowering
+- [ ] float/vector IR과 scalar/vector cast lowering
+- [ ] variadic callee `va_start/va_arg`와 aggregate SSA return
+- [ ] RISC-VM integer legalization 뒤 `-O1` 이상 IR 허용
+- [ ] 최적화 단계별 differential execution test
+
+### P2-B — object/linker/archive
+
+- [ ] `.text.*`, `.rodata.*` 사용자 section과 section garbage collection
+- [ ] COMDAT/link-once, symbol visibility와 weak/common 규칙 보강
+- [ ] 필요가 확인될 때 ABS8/ABS16과 추가 PC-relative relocation 도입
+- [ ] `cvmar` member 추가·교체·삭제와 개발용 thin archive
+- [ ] link map에 local symbol, type, size와 archive 출처 표시
+- [ ] PIC, GOT/PLT, TLS와 동적 loader는 user process 기반 이후 설계
+
+### P2-C — debugger와 진단
+
+- [ ] line table, DWARF subset 또는 RISC-VM 전용 debug 정보 결정
+- [ ] register/memory/MMU/exception/device 상태를 읽는 debugger protocol
+- [ ] breakpoint, single-step, watchpoint와 process/thread 선택
+- [ ] EXF build ID와 symbol/map 자동 연결
+- [ ] kernel panic, user fault와 scheduler trace 수집
+
+### P2-D — native LLVM backend 재평가
+
+- [ ] LLVM source tree의 native `riscvm64` TargetInfo와 builtin
+- [ ] instruction selection, register info, MC object writer와 assembler
+- [ ] LLD port 비용과 현재 IR bridge 대비 빌드/실행 성능 측정
+- [ ] 유지보수 비용이 이점보다 작을 때만 기본 backend로 전환
+
+### P2-E — 도구 hardening
+
+- [ ] EXF/object/archive/disk parser fuzzing
+- [ ] table overlap, integer overflow와 손상 파일 corpus
+- [ ] weak/common/archive 순서와 relocation overflow 독립 통합 테스트
+- [ ] reproducible build와 build ID 정책 보강
+
+## P3 — 장기 운영체제와 셀프호스팅
+
+- [ ] `fork` 또는 spawn 중심 process 생성 정책과 copy-on-write 재평가
+- [ ] pipe, signal/event, shared memory와 process IPC
+- [ ] mount table, 추가 filesystem과 block cache/writeback
+- [ ] dynamic loader와 shared library가 필요해질 때 ABI/EXF 확장
+- [ ] network device와 최소 network stack
+- [ ] user 권한, credential와 파일 접근 제어
+- [ ] 충분한 libc/userland 뒤 Clang/LLVM 자체를 RISC-VM용으로 cross-build
+- [ ] native build가 가능해진 뒤 self-hosting 범위와 재현성 검증
+
+## ABI v2 후보 — ABI v1과 섞지 않음
+
+- [ ] C bit-field 저장 단위와 배치 규칙
+- [ ] `_Atomic` 타입과 C memory order를 ISA atomic/fence에 매핑
+- [ ] callee-saved register 도입 여부를 실제 workload로 측정
+- [ ] binary128 또는 별도 `long double` 형식
+- [ ] vector aggregate와 homogeneous floating aggregate 전달
+- [ ] stack unwinding과 예외 처리 metadata
+
+ABI v1과 호환되지 않는 변경은 문서만 수정하지 않는다. ABI major, EXF 요구
+version, object metadata, tool 진단과 호환성 테스트를 함께 변경한다.
+
+## 유지·폐기·보류한 방향
+
+- 기존 `Cvm*`, `CVM_*`, `cvmclang`, `cvmir`, `cvmlink`, `cvmar`, `libcvm.a`는
+  레거시 source/tool 이름으로 유지한다. 새 public 명칭은 RISC-VM/EXF를 사용한다.
+- `.cvm` 실행파일, `CVMKERN1`과 `CVM1`은 다시 지원하지 않는다.
+- 자체 C compiler `cvmcc`는 지원과 유지보수를 종료한다. 기능 추가, 버그 수정,
+  ABI/ISA 변경 추적 또는 배포 계획은 없으며 기존 lexer/parser/example/test
+  소스만 현재 상태로 동결 보존한다.
+- RISC-V 호환 ISA port는 현재 RISC-VM ABI와 섞지 않고 별도 장기 project로
+  평가한다.
+- 무작위 kernel 물리 배치와 ASLR은 현재 필수 항목이 아니다. 보안 모델과 entropy,
+  relocation 비용을 정의한 뒤 별도 제안으로 검토한다.
+
+## 바로 시작할 작업
+
+1. `KernelProcess`/`KernelThread` 구조와 소유권 주석 작성
+2. 기존 `KernelTask[2]` 상태를 새 Thread 구조로 옮기되 동작은 유지
+3. 동적 runnable queue와 PID/TID allocator 연결
+4. 한 Process 안의 두 Thread를 포함하는 scheduler self-test 추가
+5. 전체 test와 실제 `BOOT.EXF -> KERNEL.EXF` 부팅 회귀 확인

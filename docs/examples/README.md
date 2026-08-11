@@ -19,8 +19,9 @@
 
 `llvm_ir` 예제는 LLVM text IR과 Clang C 입력을 `cvmir`/`cvmclang`으로
 변환하고 startup 오브젝트와 링크한다. 산출물에는
-`llvm_arithmetic.cvm`, `clang_arithmetic.cvm`, `kernel_memory.cvm`과 기본
-`crt0.o`/`libcvm.a`를 사용하는 `freestanding_main.cvm`이 있다.
+`llvm_arithmetic.exf`, `clang_arithmetic.exf`, `kernel_memory.exf`와 기본
+`crt0.o`/`libcvm.a`를 사용하는 `freestanding_main.exf`가 있다.
 
-`examples/compiler`의 자체 `cvmcc` 예제는 과거 회귀 참고용으로만 보존하며
-기본 빌드 대상이 아니다.
+`examples/compiler`의 자체 `cvmcc` 예제는 지원·유지보수 종료 당시 상태를
+보존한 회귀 참고 자료다. 기본 또는 선택 빌드 대상이 아니며 다시 지원할
+계획도 없다.

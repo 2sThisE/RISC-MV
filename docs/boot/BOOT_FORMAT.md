@@ -1,33 +1,40 @@
-# CVM 부팅 ABI v1
+# RISC-VM EXF와 부팅 ABI v1
 
 이 문서는 Boot ROM, 커널 이미지 생성기와 커널 사이의 바이트 단위 규약을
 정의한다. 다중 바이트 정수는 모두 little-endian이다. 디스크 및 RAM에
 C 구조체를 그대로 쓰지 않고 `boot_format.h`의 encode/decode 함수를
 사용한다.
 
-## 커널 이미지
+## EXF 실행 이미지
 
-kernel 기본 경로는 [DISK_FORMAT.md](DISK_FORMAT.md)의
-`/BOOT/KERNEL.CVM`이다. Boot ROM이 먼저 실행하는 `/BOOT/BOOT.CVM`도 v1에서
+RISC-VM의 정식 실행파일 확장자는 `.exf`이며 v1 magic은 `RVMEXF01`이다.
+기존 `CVMKERN1` magic과 `.cvm` 확장자는 지원하지 않는다. kernel 기본 경로는
+[DISK_FORMAT.md](DISK_FORMAT.md)의 `/BOOT/KERNEL.EXF`다. Boot ROM이 먼저
+실행하는 `/BOOT/BOOT.EXF`도 v1에서
 같은 segment container를 사용하지만 handoff는
 [FIRMWARE_ABI.md](FIRMWARE_ABI.md)를 따른다.
 
+`cvmlink`, `vmkimg`, `vmkdisk`와 `cvmclang`은 최종 실행 결과에 `.exf`
+확장자를 요구한다. 확장자는 도구 단계의 잘못된 파일 사용을 막고, loader는
+파일 내부의 magic, ISA ID, version, 크기, segment 범위와 CRC32를 다시
+검증한다. `.exf`는 Windows PE/EXE와 호환되는 포맷이 아니다.
+
 ```text
-CvmKernelHeader (128 bytes)
-CvmKernelSegment[segment_count] (64 bytes each)
+RiscVmExfHeader (legacy C name: CvmKernelHeader, 128 bytes)
+RiscVmExfSegment[segment_count] (legacy C name: CvmKernelSegment, 64 bytes each)
 segment payloads
 ```
 
-### CvmKernelHeader
+### RiscVmExfHeader
 
 | Offset | Size | Field |
 |---:|---:|---|
-| `0x00` | 8 | magic = `CVMKERN1` |
+| `0x00` | 8 | magic = `RVMEXF01` |
 | `0x08` | 2 | format major = 1 |
 | `0x0A` | 2 | format minor = 0 |
 | `0x0C` | 4 | header size = 128 |
 | `0x10` | 8 | flags, bit 0 = relocatable physical layout |
-| `0x18` | 4 | ISA ID = little-endian `CVM1` |
+| `0x18` | 4 | ISA ID = little-endian `RVM1` |
 | `0x1C` | 4 | ISA version = 1 |
 | `0x20` | 1 | address bits = 64 |
 | `0x21` | 1 | byte order = 1 (little-endian) |
@@ -49,7 +56,7 @@ Header CRC32는 `header_crc32` 필드를 0으로 보고 128바이트에 계산�
 Payload CRC32는 offset 128부터 파일 끝까지 계산하므로 세그먼트 테이블도
 보호한다. CRC32는 손상 검출용이며 보안 서명이 아니다.
 
-### CvmKernelSegment
+### RiscVmExfSegment
 
 | Offset | Size | Field |
 |---:|---:|---|

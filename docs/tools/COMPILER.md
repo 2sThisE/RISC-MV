@@ -1,29 +1,15 @@
-# cvmcc 부트스트랩 C 컴파일러
+# 폐기된 자체 C 컴파일러 (`cvmcc`)
 
-> 이 도구의 신규 개발은 중단됐다. 소스와 테스트는 과거 ABI 회귀 자료로만
-> 보존하며 기본 빌드에는 포함하지 않는다. 새 C 코드는 `cvmclang.ps1`과
-> LLVM 기반 경로를 사용한다.
+`cvmcc`는 더 이상 지원하거나 유지보수하지 않는다. 기능 추가, 버그 수정,
+RISC-VM ABI·ISA 변경 추적과 배포 계획도 없다. 기존 구현과 관련 테스트는
+개발 이력과 과거 회귀 참고를 위해 현재 상태 그대로 보존한다.
 
-`cvmcc`는 CVM ABI v1용 C 컴파일러의 첫 부트스트랩 단계다. C 소스를 CVM
-어셈블리로 내보내거나 어셈블러를 내부 호출해 `CVMOBJ2` 재배치 오브젝트를
-직접 만든다.
+기본 빌드는 `cvmcc.exe`를 생성하지 않고 `compiler` 예제도 빌드 대상으로
+노출하지 않는다. 따라서 아래 내용은 사용할 도구의 설명이 아니라 동결된
+구현의 역사적 기능 기록이다. 새 C 코드는
+[LLVM IR 변환 경로](LLVM_IR_TRANSLATOR.md)의 `cvmclang.ps1`을 사용한다.
 
-```powershell
-.\build\tools\cvmcc.exe -S input.c -o input.s
-.\build\tools\cvmcc.exe -c input.c -o input.o
-.\build\tools\cvmlink.exe start.o input.o -o program.cvm `
-    --base 0x10000 --entry program_entry
-```
-
-매크로나 `#include`가 필요하면 현 단계에서는 호스트 GCC로 freestanding
-전처리한 `.i`를 입력한다.
-
-```powershell
-gcc -E -ffreestanding -nostdinc input.c -o input.i
-.\build\tools\cvmcc.exe -c input.i -o input.o
-```
-
-## 현재 지원 범위
+## 동결 당시 구현 범위
 
 - `void`, `char`, `short`, `int`, `long`, `long long`과 signed/unsigned 정수
 - 정수 상수, 지역·전역 스칼라 변수, 상수 전역 초기화와 tentative definition
@@ -37,9 +23,11 @@ gcc -E -ffreestanding -nostdinc input.c -o input.i
 LOAD/STORE 및 sign/zero extension을 사용한다. `R14`는 함수 내부 frame
 pointer로 사용하며 ABI v1에서 caller-saved이므로 외부 규약과 충돌하지 않는다.
 
-## 아직 지원하지 않는 C 기능
+## 구현되지 않은 C 기능
 
 포인터·배열, 구조체·union·enum, 문자열, `for`/`switch`, `break`/`continue`,
 증감·복합 대입, stack argument, variadic, 함수 포인터, 부동소수점, 전처리기,
-최적화와 디버그 정보는 후속 단계다. 현재 컴파일러는 완전한 ISO C 구현이
-아니며 지원하지 않는 문법을 진단하고 중단한다.
+최적화와 디버그 정보는 구현되지 않았다. 이 목록을 확장할 계획은 없으며,
+현재 소스는 완전한 ISO C 구현이나 지원되는 RISC-VM 컴파일러로 간주하지
+않는다. `test_runner`의 `compiler` suite는 보존된 구현의 기존 동작을
+기록하는 회귀 검사일 뿐 지원 또는 유지보수 약속이 아니다.

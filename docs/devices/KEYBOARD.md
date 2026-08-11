@@ -31,7 +31,7 @@ U:04
 
 `D`는 key-down, `U`는 key-up이며 `04`는 A 키의 HID usage다. Escape key-down(`D:29`)은 VM을 `HALT`해 창과 프로그램을 종료한다. 키보드 모듈을 찾지 못하면 `N`을 출력하고 즉시 종료한다.
 
-키보드 장치는 VIO Hub에서 `VM_DEVICE_CLASS_INPUT` 장치로 검색해야 한다. 자동 할당된 BAR나 IRQ 번호를 하드코딩하면 안 된다. `examples/keyboard_demo.asm`이 장치 검색, 동적 IRQ 벡터 설치, 큐 drain과 UART 출력을 포함한 최소 게스트 드라이버 예제다.
+키보드 장치는 VIO Hub에서 `VM_DEVICE_CLASS_INPUT` 장치로 검색해야 한다. 자동 할당된 BAR나 IRQ 번호를 하드코딩하면 안 된다. `examples/keyboard/keyboard_demo.asm`이 장치 검색, 동적 IRQ 벡터 설치, 큐 drain과 UART 출력을 포함한 최소 게스트 드라이버 예제다.
 
 ## BAR 0 MMIO
 

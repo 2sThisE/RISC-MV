@@ -41,7 +41,7 @@ int test_ir_translator(void)
 {
     static const char source[] =
         "target datalayout = \"" CVM_LLVM_DATA_LAYOUT "\"\n"
-        "target triple = \"" CVM_LLVM_TARGET_TRIPLE "\"\n"
+        "target triple = \"" RISC_VM_LLVM_TARGET_TRIPLE "\"\n"
         "define i64 @add(i64 %a, i64 %b) {\n"
         "entry:\n"
         "  %sum = add nsw i64 %a, %b\n"
@@ -106,7 +106,7 @@ int test_ir_translator(void)
 
     static const char memory_source[] =
         "target datalayout = \"" CVM_LLVM_DATA_LAYOUT "\"\n"
-        "target triple = \"" CVM_LLVM_TARGET_TRIPLE "\"\n"
+        "target triple = \"" RISC_VM_LLVM_TARGET_TRIPLE "\"\n"
         "@kernel_result = global i64 0, align 8\n"
         "define i64 @memory_test() {\n"
         "entry:\n"
@@ -170,7 +170,7 @@ int test_ir_translator(void)
 
     static const char stack_source[] =
         "target datalayout = \"" CVM_LLVM_DATA_LAYOUT "\"\n"
-        "target triple = \"" CVM_LLVM_TARGET_TRIPLE "\"\n"
+        "target triple = \"" RISC_VM_LLVM_TARGET_TRIPLE "\"\n"
         "define i64 @sum10(i64 %a, i64 %b, i64 %c, i64 %d, i64 %e, "
         "i64 %f, i64 %g, i64 %h, i64 %i, i64 %j) {\n"
         "entry:\n"
@@ -224,7 +224,7 @@ int test_ir_translator(void)
 
     static const char intrinsic_source[] =
         "target datalayout = \"" CVM_LLVM_DATA_LAYOUT "\"\n"
-        "target triple = \"" CVM_LLVM_TARGET_TRIPLE "\"\n"
+        "target triple = \"" RISC_VM_LLVM_TARGET_TRIPLE "\"\n"
         "declare void @cvm_disable_interrupts()\n"
         "declare void @cvm_enable_interrupts()\n"
         "declare void @cvm_fence()\n"

@@ -1,6 +1,6 @@
-# CVM reference kernel
+# RISC-VM reference kernel
 
-이 폴더는 펌웨어와 부트로더 다음에 실행되는 CVM용 기준 커널의 시작점이다.
+이 폴더는 펌웨어와 부트로더 다음에 실행되는 RISC-VM 기준 커널의 시작점이다.
 현재 커널은 다음 초기화 경로를 실제로 수행한다.
 
 1. C로 작성된 초기 bootstrap이 `CvmBootInfo` handoff와 CRC32를 검증하고
@@ -22,7 +22,7 @@
    heap을 구성하고 allocation 분할·병합·재사용과 다중 페이지 할당을 검사한다.
 10. intrusive list, 동기화 byte queue, bitmap과 spinlock 런타임을 초기화하고
     자체 검사를 수행한다.
-11. supervisor kernel mapping을 유지하는 독립 PTBR을 만들고 `.cvm`의 CRC,
+11. supervisor kernel mapping을 유지하는 독립 PTBR을 만들고 RISC-VM `.exf`의 CRC,
     주소 범위, segment 중첩과 W^X를 검증해 user RX/R/RW page와 64KiB stack을
     적재한다. guard page와 supervisor mapping의 user 접근 차단도 검사한다.
 12. VIO hub에서 block/키보드/display 장치를 찾고 supervisor MMIO alias로
@@ -31,7 +31,7 @@
 13. syscall vector 76에 dispatcher를 연결하고 page별 user 권한을 먼저
     검증하는 `copy_from_user`/`copy_to_user`로 잘못된 포인터와 overflow를
     fault 없이 거부한다. 초기 ABI는 `exit`, `write`, `read`, `yield`, `getpid`다.
-14. 두 user CVM task를 독립 주소 공간에 올리고 timer IRQ 0에서 전체 GPR,
+14. 두 RISC-VM user task를 독립 주소 공간에 올리고 timer IRQ 0에서 전체 GPR,
     PC, FLAGS, SP와 PTBR을 저장·교체한다. 두 task의 실제 syscall 출력과 종료,
     timer 기반 선점이 모두 관측되어야 `KERNEL: READY`를 출력한다.
 
@@ -42,7 +42,7 @@
 ```
 
 전체 빌드 또는 `boot` 예제 빌드는 다음 소스를 각각 오브젝트로 만든 뒤
-`cvmlink`로 `kernel.cvm`과 `kernel.map`을 생성한다.
+legacy 이름의 `cvmlink`로 `kernel.exf`와 `kernel.map`을 생성한다.
 
 - `kernel_main.c`: BootInfo 검증, UART와 전체 부팅 순서
 - `pmm.c`: 물리 페이지 free-list
@@ -50,7 +50,7 @@
 - `heap.c`: 동적 가상주소 기반 kernel heap
 - `runtime.c`: list, byte queue, bitmap과 spinlock
 - `address_space.c`: 프로세스별 page table과 user page 관리
-- `user_loader.c`: 고정 가상주소 CVM 사용자 이미지 loader
+- `user_loader.c`: 고정 가상주소 RISC-VM EXF 사용자 이미지 loader
 - `devices.c`: VIO 검색, block/키보드/display와 내장 MMIO 장치 연결
 - `fat32.c`, `vfs.c`: FAT32 8.3 파일 읽기/쓰기와 단일 root VFS
 - `syscall.c`: dispatcher, 표준 입출력 syscall과 user-copy 검증
@@ -62,7 +62,7 @@
 즉 커널 정책과 일반 로직은 C에 있고 CPU가 만든 예외 프레임을 직접 다루는
 부분만 짧은 assembly wrapper로 유지한다.
 부팅 디스크 예제는 이
-`kernel.cvm`을 `/BOOT/KERNEL.CVM`으로 넣는다. 이미지 자체도 text=RX,
+`kernel.exf`를 `/BOOT/KERNEL.EXF`로 넣는다. 이미지 자체도 text=RX,
 rodata=R, data/BSS=RW인 다중 세그먼트이므로 loader 단계부터 W^X가
 표현된다.
 

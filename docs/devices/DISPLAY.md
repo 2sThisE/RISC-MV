@@ -18,11 +18,11 @@ guest program -> display BAR -> display_device.dll
 
 # 마지막 프레임만 메모리에 보관
 .\build\main.exe -r 300000 -l .\build\examples\display_demo.bin `
-    -d .\build\devices\display_device.dll -display headless
+    -display headless
 
 # Win32 창에 표시
 .\build\main.exe -r 300000 -l .\build\examples\display_demo.bin `
-    -d .\build\devices\display_device.dll -display window
+    -display window
 ```
 
 `-display`의 기본값은 `headless`다. window 모드에서 게스트가 한 프레임 이상 제출하고 HALT하면 창을 사용자가 닫을 때까지 host 프로세스가 기다린다. 프레임을 제출하지 않았으면 VM 종료와 함께 창도 바로 닫힌다.
@@ -33,15 +33,23 @@ guest program -> display BAR -> display_device.dll
 .\build.ps1 -e display
 ```
 
-데모는 320×200 색상 패턴과 `HELLO VM` 텍스트를 바이너리 안에 넣고, 부팅 후 display BAR를 설정해 한 프레임을 제출한 다음 HALT한다. 디스플레이가 첫 번째 외부 장치여서 BAR 0가 `0xFFFFFFFFF0000000`에 배치되는 실행을 전제로 한다.
+데모는 320×200 색상 패턴과 `HELLO VM` 텍스트를 바이너리 안에 넣고,
+부팅 후 VIO Hub에서 display class 장치를 찾아 BAR 0를 설정한다. 따라서
+디스플레이의 슬롯이나 동적 MMIO 주소를 하드코딩하지 않는다. 한 프레임을
+제출한 뒤 `HALT`한다.
 
-텍스트에는 Public Domain인 `font8x8`의 printable ASCII 테이블을 사용한다. `examples/font8x8_basic.h`가 글리프 데이터이고 `display_demo_builder.c`의 `draw_char`와 `draw_string`이 글리프 비트를 XRGB8888 픽셀로 바꾼다. 현재 데모는 빌드 단계에서 텍스트가 포함된 framebuffer를 생성한다. 장차 게스트용 C 컴파일러나 assembler가 생기면 같은 두 함수를 게스트 라이브러리로 옮겨 실행 중 문자열을 그릴 수 있다.
+텍스트에는 Public Domain인 `font8x8`의 printable ASCII 테이블을 사용한다.
+`examples/display/font8x8_basic.h`가 글리프 데이터이고 같은 폴더의
+`display_demo_builder.c`에 있는 `draw_char`와 `draw_string`이 글리프 비트를
+XRGB8888 픽셀로 바꾼다. 현재 데모는 호스트 빌드 단계에서 텍스트가 포함된
+framebuffer를 생성한다. 실행 중 문자열 렌더링이 필요하면 이 로직과 폰트를
+게스트 라이브러리로 포팅해야 한다.
 
 ## 픽셀 형식과 제한
 
 - 형식: `XRGB8888` (`FORMAT=1`), 픽셀당 4바이트
 - 최대 크기: 1920×1080
-- byte order가 little-endian인 host에서 한 픽셀의 RAM 배치는 `B, G, R, X`다.
+- RISC-VM RAM에서 한 픽셀의 byte 배치는 `B, G, R, X`다.
 - framebuffer 주소는 정렬되지 않아도 된다.
 - `STRIDE`는 최소 `WIDTH * 4`, `BUFFER_SIZE`는 최소 `STRIDE * HEIGHT`여야 한다.
 - host service ABI에 맞춰 `STRIDE`는 `UINT32_MAX` 이하여야 한다.

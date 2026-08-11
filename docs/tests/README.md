@@ -36,6 +36,6 @@
 1. `tests/example_test.c`를 만들고 `int test_example(void)` 함수를 구현한다.
 2. 성공하면 0을 반환하고 검증에는 `assert()`를 사용한다.
 3. `test_suites.h`의 `TEST_SUITE_LIST`에 `X("example", test_example)` 한 줄을 추가한다.
-4. `build_runner.ps1`을 다시 실행한다. `*_test.c` 파일은 자동으로 빌드 대상에 포함된다.
+4. 루트의 `.\build.ps1`을 다시 실행한다. `*_test.c` 파일은 자동으로 빌드 대상에 포함된다.
 
 suite 내부 helper는 다른 파일과 이름이 겹치지 않도록 `static`으로 선언한다. 생성한 host thread와 VM 자원은 성공 경로에서 suite가 직접 정리해야 한다.

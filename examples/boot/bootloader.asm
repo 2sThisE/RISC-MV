@@ -1,4 +1,4 @@
-; CVM second-stage bootloader.
+; RISC-VM second-stage bootloader.
 ; Entry handoff:
 ;   R0 = CvmFirmwareTable at 0x6000
 ;   R1 = "CVMFWH01" handoff magic
@@ -46,12 +46,12 @@ loader_entry:
     BRCC NE, loader_fatal_table
 
     MOVI64 R0, loader_message_start
-    MOVI32U R1, 18
+    MOVI32U R1, 22
     CALLREL firmware_console
     CMPI32 R0, 0
     BRCC NE, loader_fatal_halt
 
-    ; Ask firmware for KERNEL.CVM size. Reserve only its page-rounded size at
+    ; Ask firmware for KERNEL.EXF size. Reserve only its page-rounded size at
     ; the top of RAM. The relocatable kernel itself is placed first-fit at
     ; physical first-fit at or above 0x30000 and executes at its fixed VA.
     MOVI64 R0, kernel_name
@@ -123,7 +123,7 @@ loader_entry:
     BRCC NE, loader_fatal_map
 
     MOVI64 R0, loader_message_kernel
-    MOVI32U R1, 19
+    MOVI32U R1, 23
     CALLREL firmware_console
     CMPI32 R0, 0
     BRCC NE, loader_fatal_halt
@@ -172,7 +172,7 @@ firmware_console:
     RET
 
 ; ---------------------------------------------------------------------------
-; KERNEL.CVM v1 multi-segment validation
+; RISC-VM KERNEL.EXF v1 multi-segment validation
 
 ; R0=firmware memory-map buffer, R1=entry count. Chooses the first page-aligned
 ; USABLE range after the fixed second-stage slot that also stays below staging.
@@ -236,7 +236,7 @@ validate_kernel_image:
     STORE64O R6, R4, 0x88
     LOAD64O R3, R6, 0x30
     LOAD64 R4, R3
-    MOVI64 R5, 0x314E52454B4D5643
+    MOVI64 R5, 0x31304658454D5652 ; "RVMEXF01"
     CMP R4, R5
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x08
@@ -249,7 +249,7 @@ validate_kernel_image:
     CMPI32 R4, 1               ; RELOCATABLE_PHYSICAL
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x18
-    MOVI32U R5, 0x314D5643
+    MOVI32U R5, 0x314D5652        ; "RVM1"
     CMP R4, R5
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x1C
@@ -962,30 +962,30 @@ crc_done:
 
 loader_fatal_table:
     MOVI64 R0, loader_message_table
-    MOVI32U R1, 25
+    MOVI32U R1, 29
     JUMPREL loader_fatal_print
 loader_fatal_file:
     MOVI64 R0, loader_message_file
-    MOVI32U R1, 27
+    MOVI32U R1, 31
     JUMPREL loader_fatal_print
 loader_fatal_kernel_validate:
     MOVI64 R4, loader_message_bad_kernel_validate
     ADDI32 R0, 48
-    STORE8O R4, R0, 31
+    STORE8O R4, R0, 35
     MOVI64 R0, loader_message_bad_kernel_validate
-    MOVI32U R1, 33
+    MOVI32U R1, 37
     JUMPREL loader_fatal_print
 loader_fatal_kernel_load:
     MOVI64 R0, loader_message_bad_kernel_load
-    MOVI32U R1, 28
+    MOVI32U R1, 32
     JUMPREL loader_fatal_print
 loader_fatal_kernel_mmu:
     MOVI64 R0, loader_message_bad_kernel_mmu
-    MOVI32U R1, 27
+    MOVI32U R1, 31
     JUMPREL loader_fatal_print
 loader_fatal_map:
     MOVI64 R0, loader_message_map
-    MOVI32U R1, 27
+    MOVI32U R1, 31
 loader_fatal_print:
     MOVI32U R10, 0x6000
     CALLREL firmware_console
@@ -993,20 +993,20 @@ loader_fatal_halt:
     HALT
 
 kernel_name:
-    .ascii "KERNEL  CVM"
+    .ascii "KERNEL  EXF"
 loader_message_start:
-    .ascii "CVM LOADER: start\n"
+    .ascii "RISC-VM LOADER: start\n"
 loader_message_kernel:
-    .ascii "CVM LOADER: kernel\n"
+    .ascii "RISC-VM LOADER: kernel\n"
 loader_message_table:
-    .ascii "CVM LOADER E01: firmware\n"
+    .ascii "RISC-VM LOADER E01: firmware\n"
 loader_message_file:
-    .ascii "CVM LOADER E02: KERNEL.CVM\n"
+    .ascii "RISC-VM LOADER E02: KERNEL.EXF\n"
 loader_message_bad_kernel_validate:
-    .ascii "CVM LOADER E03: validate stage 0\n"
+    .ascii "RISC-VM LOADER E03: validate stage 0\n"
 loader_message_bad_kernel_load:
-    .ascii "CVM LOADER E04: kernel load\n"
+    .ascii "RISC-VM LOADER E04: kernel load\n"
 loader_message_bad_kernel_mmu:
-    .ascii "CVM LOADER E05: kernel MMU\n"
+    .ascii "RISC-VM LOADER E05: kernel MMU\n"
 loader_message_map:
-    .ascii "CVM LOADER E06: memory map\n"
+    .ascii "RISC-VM LOADER E06: memory map\n"

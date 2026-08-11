@@ -3,10 +3,13 @@
 
 #include <stddef.h>
 
-#define CVM_LLVM_TARGET_TRIPLE "cvm64-unknown-none"
+#define RISC_VM_LLVM_TARGET_TRIPLE "riscvm64-unknown-none"
 #define CVM_LLVM_DATA_LAYOUT \
     "e-p:64:64-i8:8-i16:16-i32:32-i64:64-f32:32-f64:64-" \
     "v128:128-a:0:64-n8:16:32:64-S128"
+
+/* Legacy translator sources keep this spelling as a source-level alias. */
+#define CVM_LLVM_TARGET_TRIPLE RISC_VM_LLVM_TARGET_TRIPLE
 
 typedef struct {
     size_t line;
@@ -18,7 +21,7 @@ typedef struct {
     int allow_foreign_triple;
 } CvmIrOptions;
 
-/* Parse and verify LLVM text IR with LLVM 22, then lower supported IR to CVM .s. */
+/* Parse LLVM 22 text IR, then lower supported IR to RISC-VM assembly. */
 int cvmir_translate(const char *source,
                     const CvmIrOptions *options,
                     char **assembly,

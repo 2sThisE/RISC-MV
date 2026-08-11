@@ -317,7 +317,7 @@ function Build-CompilerExample {
     Assert-LastExitCode 'compiler example startup assembly'
     & $linker (Join-Path $output 'compiler_start.o') `
         (Join-Path $output 'compiler_demo.o') `
-        -o (Join-Path $output 'compiler_demo.cvm') `
+        -o (Join-Path $output 'compiler_demo.exf') `
         --base 0x10000 --entry compiler_demo_entry `
         --map (Join-Path $symbolOutput 'compiler_demo.map')
     Assert-LastExitCode 'compiler example link'
@@ -338,7 +338,7 @@ function Build-LLVMIRExample {
     Assert-LastExitCode 'LLVM IR example startup assembly'
     & $linker (Join-Path $output 'llvm_start.o') `
         (Join-Path $output 'llvm_arithmetic.o') `
-        -o (Join-Path $output 'llvm_arithmetic.cvm') `
+        -o (Join-Path $output 'llvm_arithmetic.exf') `
         --base 0x10000 --entry cvmir_demo_entry `
         --map (Join-Path $symbolOutput 'llvm_arithmetic.map')
     Assert-LastExitCode 'LLVM IR example link'
@@ -353,14 +353,14 @@ function Build-LLVMIRExample {
         Assert-LastExitCode 'cvmclang arithmetic compilation'
         & $linker (Join-Path $output 'llvm_start.o') `
             (Join-Path $output 'clang_arithmetic.o') `
-            -o (Join-Path $output 'clang_arithmetic.cvm') `
+            -o (Join-Path $output 'clang_arithmetic.exf') `
             --base 0x10000 --entry cvmir_demo_entry `
             --map (Join-Path $symbolOutput 'clang_arithmetic.map')
         Assert-LastExitCode 'installed Clang IR link'
 
         & $clangDriver `
             (Join-Path $ProjectRoot 'examples\llvm_ir\kernel_memory.c') `
-            -o (Join-Path $output 'kernel_memory.cvm') `
+            -o (Join-Path $output 'kernel_memory.exf') `
             -Startup (Join-Path $ProjectRoot `
                 'examples\llvm_ir\kernel_memory_start.s') `
             -Entry cvm_kernel_memory_entry `
@@ -369,7 +369,7 @@ function Build-LLVMIRExample {
 
         & $clangDriver `
             (Join-Path $ProjectRoot 'examples\llvm_ir\freestanding_main.c') `
-            -o (Join-Path $output 'freestanding_main.cvm')
+            -o (Join-Path $output 'freestanding_main.exf')
         Assert-LastExitCode 'cvmclang default crt0 and libcvm link'
     } else {
         Write-Host '[examples/llvm_ir] Clang not found; skipping host IR check'
@@ -411,7 +411,7 @@ function Build-Kernel {
     ) + $kernelCObjects + @(
         (Join-Path $output 'layout_end.o'),
         (Join-Path $BuildRoot 'sysroot\lib\libcvm.a'),
-        '-o', (Join-Path $output 'kernel.cvm'),
+        '-o', (Join-Path $output 'kernel.exf'),
         '--base', '0x40000000', '--entry', 'kernel_entry',
         '--physical-relocatable',
         '--map', $kernelMap
@@ -426,7 +426,7 @@ function Build-Kernel {
     }
     $kernelEnd = [Convert]::ToUInt64($kernelEndLine.Matches[0].Groups[1].Value, 16)
     $kernelImageSize = [uint64](Get-Item -LiteralPath `
-        (Join-Path $output 'kernel.cvm')).Length
+        (Join-Path $output 'kernel.exf')).Length
     $minimumStagingSize = [uint64]([Math]::Ceiling(
         $kernelImageSize / 4096.0) * 4096)
     if ($minimumStagingSize -gt 0xD0000) {
@@ -551,7 +551,7 @@ function Build-LinkerExample {
     Assert-LastExitCode 'linker example archive creation'
     & $linker (Join-Path $output 'linker_demo_main.o') `
         (Join-Path $output 'liblinker_demo.a') `
-        -o (Join-Path $output 'linker_demo.cvm') `
+        -o (Join-Path $output 'linker_demo.exf') `
         --map (Join-Path $symbolOutput 'linker_demo.map')
     Assert-LastExitCode 'linker example link'
 }
@@ -575,7 +575,7 @@ function Build-BootExample {
         --symbols (Join-Path $symbolOutput 'bootloader.sym')
     Assert-LastExitCode 'bootloader assembly'
     & $imageTool pack (Join-Path $output 'bootloader.bin') `
-        -o (Join-Path $output 'bootloader.cvm') `
+        -o (Join-Path $output 'bootloader.exf') `
         --load 0x20000 --entry 0x20000 --memory-size 0x4000
     Assert-LastExitCode 'bootloader packaging'
 
@@ -584,7 +584,7 @@ function Build-BootExample {
         --symbols (Join-Path $symbolOutput 'kernel_stub.sym')
     Assert-LastExitCode 'kernel stub assembly'
     & $imageTool pack (Join-Path $output 'kernel_stub.bin') `
-        -o (Join-Path $output 'kernel_stub.cvm') `
+        -o (Join-Path $output 'kernel_stub.exf') `
         --load 0x30000 --entry 0x30000 --memory-size 0x1000
     Assert-LastExitCode 'kernel stub packaging'
 
@@ -593,8 +593,8 @@ function Build-BootExample {
         Remove-Item -LiteralPath $diskPath -Force
     }
     & $diskTool create -o $diskPath --size 64M `
-        --bootloader (Join-Path $output 'bootloader.cvm') `
-        --kernel (Join-Path $BuildRoot 'kernel\kernel.cvm') `
+        --bootloader (Join-Path $output 'bootloader.exf') `
+        --kernel (Join-Path $BuildRoot 'kernel\kernel.exf') `
         --reproducible
     Assert-LastExitCode 'boot disk generation'
     if (Test-Path -LiteralPath (Join-Path $BuildRoot 'modules\block_device.dll')) {

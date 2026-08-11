@@ -12,11 +12,23 @@ static void print_usage(const char *program)
 {
     fprintf(stderr,
             "Usage:\n"
-            "  %s create -o DISK.img --size SIZE --bootloader BOOT.cvm --kernel KERNEL.cvm [--reproducible]\n"
+            "  %s create -o DISK.img --size SIZE --bootloader BOOT.exf --kernel KERNEL.exf [--reproducible]\n"
             "  %s inspect DISK.img\n"
             "SIZE accepts an optional binary K, M or G suffix.\n",
             program,
             program);
+}
+
+static int has_exf_extension(const char *path)
+{
+    if (path == NULL) return 0;
+    size_t length = strlen(path);
+    if (length < 4) return 0;
+    const char *extension = path + length - 4;
+    return extension[0] == '.' &&
+           (extension[1] == 'e' || extension[1] == 'E') &&
+           (extension[2] == 'x' || extension[2] == 'X') &&
+           (extension[3] == 'f' || extension[3] == 'F');
 }
 
 static int parse_size(const char *text, uint64_t *value)
@@ -134,6 +146,12 @@ static int create_image(int argc, char **argv)
         kernel_path == NULL || disk_size == 0) {
         return 2;
     }
+    if (!has_exf_extension(bootloader_path) ||
+        !has_exf_extension(kernel_path)) {
+        fputs("vmkdisk: bootloader and kernel must be RISC-VM .exf files\n",
+              stderr);
+        return 2;
+    }
 
     size_t bootloader_size;
     uint8_t *bootloader = read_image("bootloader",
@@ -184,16 +202,16 @@ static int create_image(int argc, char **argv)
            output_path,
            info.disk_size,
            info.total_sectors);
-    printf("  CVM boot partition: LBA %" PRIu64 " + %" PRIu64 "\n",
+    printf("  RISC-VM boot partition: LBA %" PRIu64 " + %" PRIu64 "\n",
            info.partition_start_lba,
            info.partition_sectors);
     printf("  FAT32: %u sectors/cluster, %u clusters\n",
            info.sectors_per_cluster,
            info.cluster_count);
-    printf("  /BOOT/BOOT.CVM:   %" PRIu64 " bytes, first cluster %u\n",
+    printf("  /BOOT/BOOT.EXF:   %" PRIu64 " bytes, first cluster %u\n",
            info.bootloader_size,
            info.bootloader_first_cluster);
-    printf("  /BOOT/KERNEL.CVM: %" PRIu64 " bytes, first cluster %u\n",
+    printf("  /BOOT/KERNEL.EXF: %" PRIu64 " bytes, first cluster %u\n",
            info.kernel_size,
            info.kernel_first_cluster);
     return 0;
@@ -214,7 +232,7 @@ static int inspect_image(const char *path)
                 error);
         return 1;
     }
-    printf("Valid CVM GPT/FAT32 boot disk\n");
+    printf("Valid RISC-VM GPT/FAT32 boot disk\n");
     printf("  image:              %s\n", path);
     printf("  size:               %" PRIu64 " bytes\n", info.disk_size);
     printf("  sectors:            %" PRIu64 "\n", info.total_sectors);

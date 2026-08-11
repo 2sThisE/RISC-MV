@@ -29,8 +29,8 @@ static void print_usage(const char *program)
 {
     fprintf(stderr,
             "Usage:\n"
-            "  %s pack INPUT.bin -o OUTPUT.cvm --load ADDRESS [options]\n"
-            "  %s inspect INPUT.cvm\n"
+            "  %s pack INPUT.bin -o OUTPUT.exf --load ADDRESS [options]\n"
+            "  %s inspect INPUT.exf\n"
             "Options:\n"
             "  --entry ADDRESS       Default: load address\n"
             "  --virtual ADDRESS     Default: load address\n"
@@ -41,6 +41,18 @@ static void print_usage(const char *program)
             "  --build-id HEX32      16-byte hexadecimal build identifier\n",
             program,
             program);
+}
+
+static int has_exf_extension(const char *path)
+{
+    if (path == NULL) return 0;
+    size_t length = strlen(path);
+    if (length < 4) return 0;
+    const char *extension = path + length - 4;
+    return extension[0] == '.' &&
+           (extension[1] == 'e' || extension[1] == 'E') &&
+           (extension[2] == 'x' || extension[2] == 'X') &&
+           (extension[3] == 'f' || extension[3] == 'F');
 }
 
 static int parse_u64(const char *text, uint64_t *value)
@@ -241,7 +253,8 @@ static int parse_pack_options(int argc, char **argv, PackOptions *options)
             return 0;
         }
     }
-    return options->output_path != NULL && options->load_set;
+    return options->output_path != NULL &&
+           has_exf_extension(options->output_path) && options->load_set;
 }
 
 static int pack_kernel(const PackOptions *options)
@@ -279,11 +292,11 @@ static int pack_kernel(const PackOptions *options)
 
     CvmKernelHeader header;
     memset(&header, 0, sizeof(header));
-    memcpy(header.magic, CVM_KERNEL_MAGIC, 8);
+    memcpy(header.magic, RISC_VM_EXF_MAGIC, 8);
     header.format_major = CVM_KERNEL_FORMAT_MAJOR;
     header.format_minor = CVM_KERNEL_FORMAT_MINOR;
     header.header_size = CVM_KERNEL_HEADER_SIZE;
-    header.isa_id = CVM_ISA_ID;
+    header.isa_id = RISC_VM_ISA_ID;
     header.isa_version = CVM_ISA_VERSION;
     header.address_bits = CVM_ADDRESS_BITS;
     header.byte_order = CVM_BYTE_ORDER_LITTLE;
@@ -376,7 +389,7 @@ static int inspect_kernel(const char *path)
         return 1;
     }
 
-    printf("CVM kernel image v%u.%u\n", header.format_major,
+    printf("RISC-VM EXF image v%u.%u\n", header.format_major,
            header.format_minor);
     printf("  file size:         %" PRIu64 "\n", header.image_file_size);
     if ((header.flags & CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL) != 0) {
@@ -426,6 +439,11 @@ int main(int argc, char **argv)
         return pack_kernel(&options);
     }
     if (argc == 3 && strcmp(argv[1], "inspect") == 0) {
+        if (!has_exf_extension(argv[2])) {
+            fputs("vmkimg: RISC-VM executables require the .exf extension\n",
+                  stderr);
+            return 2;
+        }
         return inspect_kernel(argv[2]);
     }
     print_usage(argv[0]);

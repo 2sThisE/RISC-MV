@@ -4,26 +4,49 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CVM_KERNEL_MAGIC "CVMKERN1"
+#define RISC_VM_EXF_MAGIC "RVMEXF01"
 #define CVM_BOOTINFO_MAGIC "CVMBOOT1"
 
-#define CVM_KERNEL_FORMAT_MAJOR UINT16_C(1)
-#define CVM_KERNEL_FORMAT_MINOR UINT16_C(0)
+#define RISC_VM_EXF_VERSION_MAJOR UINT16_C(1)
+#define RISC_VM_EXF_VERSION_MINOR UINT16_C(0)
 #define CVM_BOOTINFO_VERSION_MAJOR UINT16_C(1)
 #define CVM_BOOTINFO_VERSION_MINOR UINT16_C(0)
 
-#define CVM_KERNEL_HEADER_SIZE ((size_t)128)
-#define CVM_KERNEL_SEGMENT_SIZE ((size_t)64)
+#define RISC_VM_EXF_HEADER_SIZE ((size_t)128)
+#define RISC_VM_EXF_SEGMENT_SIZE ((size_t)64)
+#define RISC_VM_EXF_MAX_SEGMENTS UINT16_C(64)
+#define CVM_KERNEL_HEADER_SIZE RISC_VM_EXF_HEADER_SIZE
+#define CVM_KERNEL_SEGMENT_SIZE RISC_VM_EXF_SEGMENT_SIZE
 #define CVM_BOOTINFO_HEADER_SIZE ((size_t)256)
 #define CVM_MEMORY_MAP_ENTRY_SIZE ((size_t)32)
-#define CVM_KERNEL_MAX_SEGMENTS UINT16_C(64)
+#define CVM_KERNEL_MAX_SEGMENTS RISC_VM_EXF_MAX_SEGMENTS
 #define CVM_BOOT_VIRTUAL_HANDOFF_SIZE ((size_t)64)
 #define CVM_BOOT_VIRTUAL_HANDOFF_MAGIC "CVMVIRT1"
 
-#define CVM_ISA_ID UINT32_C(0x314D5643) /* "CVM1" in little-endian. */
-#define CVM_ISA_VERSION UINT32_C(1)
-#define CVM_BYTE_ORDER_LITTLE UINT8_C(1)
-#define CVM_ADDRESS_BITS UINT8_C(64)
+#define RISC_VM_ISA_ID UINT32_C(0x314D5652) /* "RVM1" little-endian. */
+#define RISC_VM_ISA_VERSION UINT32_C(1)
+#define RISC_VM_BYTE_ORDER_LITTLE UINT8_C(1)
+#define RISC_VM_ADDRESS_BITS UINT8_C(64)
+#define CVM_ISA_VERSION RISC_VM_ISA_VERSION
+#define CVM_BYTE_ORDER_LITTLE RISC_VM_BYTE_ORDER_LITTLE
+#define CVM_ADDRESS_BITS RISC_VM_ADDRESS_BITS
+
+/*
+ * Legacy source-level names remain available while the public architecture
+ * and executable format use RISC-VM EXF terminology. These aliases do not
+ * make old CVMKERN1/.cvm images compatible with EXF v1.
+ */
+#define CVM_KERNEL_MAGIC RISC_VM_EXF_MAGIC
+#define CVM_KERNEL_FORMAT_MAJOR RISC_VM_EXF_VERSION_MAJOR
+#define CVM_KERNEL_FORMAT_MINOR RISC_VM_EXF_VERSION_MINOR
+#define CVM_ISA_ID RISC_VM_ISA_ID
+
+#define RISC_VM_EXF_FLAG_RELOCATABLE_PHYSICAL \
+    CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL
+#define RISC_VM_EXF_SEGMENT_LOAD CVM_SEGMENT_LOAD
+#define RISC_VM_EXF_SEGMENT_READ CVM_SEGMENT_READ
+#define RISC_VM_EXF_SEGMENT_WRITE CVM_SEGMENT_WRITE
+#define RISC_VM_EXF_SEGMENT_EXECUTE CVM_SEGMENT_EXECUTE
 
 #define CVM_BOOTINFO_HANDOFF_MAGIC UINT64_C(0x31544F4F424D5643)
 
@@ -106,6 +129,9 @@ typedef struct {
     uint64_t reserved;
 } CvmKernelSegment;
 
+typedef CvmKernelHeader RiscVmExfHeader;
+typedef CvmKernelSegment RiscVmExfSegment;
+
 typedef struct {
     uint8_t magic[8];
     uint16_t version_major;
@@ -178,6 +204,8 @@ typedef enum {
     CVM_BOOT_FORMAT_BAD_ENTRY
 } CvmBootFormatStatus;
 
+typedef CvmBootFormatStatus RiscVmExfStatus;
+
 _Static_assert(sizeof(CvmKernelHeader) == CVM_KERNEL_HEADER_SIZE,
                "CvmKernelHeader layout changed");
 _Static_assert(sizeof(CvmKernelSegment) == CVM_KERNEL_SEGMENT_SIZE,
@@ -208,6 +236,14 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
                                                CvmKernelHeader *header,
                                                char *error,
                                                size_t error_size);
+
+/* Canonical names for new RISC-VM EXF code; implementations remain legacy. */
+#define risc_vm_exf_header_encode cvm_kernel_header_encode
+#define risc_vm_exf_header_decode cvm_kernel_header_decode
+#define risc_vm_exf_segment_encode cvm_kernel_segment_encode
+#define risc_vm_exf_segment_decode cvm_kernel_segment_decode
+#define risc_vm_exf_finalize cvm_kernel_image_finalize
+#define risc_vm_exf_validate cvm_kernel_image_validate
 
 void cvm_boot_info_encode(uint8_t output[CVM_BOOTINFO_HEADER_SIZE],
                           const CvmBootInfo *info);

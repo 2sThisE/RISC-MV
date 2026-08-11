@@ -7,12 +7,22 @@
 ```powershell
 .\build.ps1 -e block -d block
 
-.\build\main.exe -r 4096 -l .\build\examples\block_demo.bin `
-    -d .\build\devices\block_device.dll `
-    -dc "path=.\disk.img;create=67108864"
+.\build\main.exe -r 4096 -l .\build\examples\block_demo.bin
 ```
 
-`-dc`는 바로 앞의 `-d` 모듈에 configuration 문자열을 전달한다. 여러 모듈을 연결할 때는 필요한 `-d` 바로 뒤에 `-dc`를 둔다.
+장치 빌드는 DLL을 `build/modules`에 복사하고
+`build/modules/block_device.conf`도 생성하므로 `main`이 자동으로 연결한다.
+기본 sidecar는 `build/devices/block_device.img`를 파일이 없을 때 64MiB로
+생성한다. 다른 설정이 필요하면 실행 전에 sidecar의 한 줄을 바꾼다.
+
+```powershell
+Set-Content .\build\modules\block_device.conf `
+    'path=.\disk.img;create=67108864'
+```
+
+`-dc`는 명시적 `-d` 바로 앞이 아니라 바로 뒤에 놓아 그 모듈에 configuration
+문자열을 전달한다. 자동 모듈과 같은 DLL을 다시 `-d`로 지정하면 두 장치가
+연결되므로, 일반적인 빌드 결과에서는 sidecar 방식을 사용한다.
 
 지원 설정:
 
@@ -110,7 +120,8 @@ LBA 범위는 `count <= capacity - lba` 형태로 검사하여 덧셈 overflow�
 
 - 한 장치당 요청 하나만 처리
 - scatter/gather 및 descriptor queue 없음
-- hot-unplug 없음
+- `main`에서 실행 중 hot-unplug를 요청하는 관리 UI/CLI 없음. Device Manager의
+  detach API는 존재함
 - 취소 가능한 진행 중 요청 없음
 - raw 이미지 자체의 snapshot/COW 없음
 - 장치는 파티션과 파일시스템을 해석하지 않음. 호스트의 `vmkdisk`가

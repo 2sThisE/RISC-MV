@@ -239,7 +239,7 @@ void main_options_print_help(FILE *stream,
             "  %s -r SIZE -l FILE [OPTIONS]\n"
             "  %s -r SIZE -rom FILE [OPTIONS]\n"
             "\n"
-            "Run the custom 64-bit VM from a RAM image, a Boot ROM, or both.\n"
+            "Run the 64-bit RISC-VM from a RAM image, a Boot ROM, or both.\n"
             "\n"
             "Required:\n"
             "  -r, --ram SIZE            RAM bytes; optional b/k/m/g suffix uses B/KiB/MiB/GiB\n"

@@ -1,4 +1,4 @@
-# VM instruction set
+# RISC-VM instruction set
 
 ## 기본 규칙
 

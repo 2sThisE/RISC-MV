@@ -1,24 +1,24 @@
-# CVM Firmware ABI v1
+# RISC-VM Firmware ABI v1
 
-CVM Firmware ABI는 Boot ROM과 `BOOT.CVM` 2차 부트로더 사이의 최소 공통
-규격이다. UEFI의 System Table과 Boot Services 분리를 참고하지만, CVM 독자
+RISC-VM Firmware ABI는 Boot ROM과 `BOOT.EXF` 2차 부트로더 사이의 최소 공통
+규격이다. UEFI의 System Table과 Boot Services 분리를 참고하지만, RISC-VM 독자
 ISA와 VIO 장치를 위한 별도 규격이며 UEFI 호환을 주장하지 않는다.
 
 ## 부팅 경로
 
 ```text
-reset -> Boot ROM -> /BOOT/BOOT.CVM -> /BOOT/KERNEL.CVM
+reset -> Boot ROM -> /BOOT/BOOT.EXF -> /BOOT/KERNEL.EXF
       -> ExitBootServices -> kernel entry
 ```
 
 Boot ROM은 GPT/FAT32와 VIO block 장치를 소유한다. 2차 부트로더는 디스크
 구조를 직접 해석하지 않고 Firmware Table의 파일 서비스를 사용한다.
 
-## BOOT.CVM handoff
+## BOOT.EXF handoff
 
 | 상태 | 값 |
 |---|---|
-| `PC` | BOOT.CVM physical entry |
+| `PC` | BOOT.EXF physical entry |
 | `R0` | `CvmFirmwareTable` 물리 주소, v1은 `0x6000` |
 | `R1` | `CVM_FIRMWARE_HANDOFF_MAGIC` |
 | `R2` | boot VIO slot |
@@ -27,7 +27,7 @@ Boot ROM은 GPT/FAT32와 VIO block 장치를 소유한다. 2차 부트로더는 
 | MMU | off |
 | IRQ | disabled |
 
-`BOOT.CVM`은 현재 kernel image와 같은 검증된 `CVMKERN1` segment container를
+`BOOT.EXF`는 kernel image와 같은 검증된 `RVMEXF01` segment container를
 사용한다. 이미지의 의미는 디스크 경로와 handoff ABI로 구분한다.
 
 ## 호출 규약
@@ -85,7 +85,7 @@ RAM 두 구간이다. 부트로더는 kernel, BootInfo와 자신의 임시 영�
 ### GetFileSize
 
 `R0=11-byte FAT 8.3 short name`. 성공 시 `R1=file size`다. 이름은 NUL 종료
-문자열이 아니라 `KERNEL  CVM`처럼 정확히 11바이트다.
+문자열이 아니라 `KERNEL  EXF`처럼 정확히 11바이트다.
 
 ### ReadFile
 
@@ -107,6 +107,6 @@ chain을 따라 exact file bytes를 복사한다. 성공 시 `R1=file size`다.
 - FAT short name과 Boot directory 파일만 지원
 - 동적 memory allocation service 없음
 - Runtime Service는 ResetSystem만 제공
-- BOOT.CVM은 단일 fixed segment이고 reference KERNEL.CVM은 링커가 만든
+- BOOT.EXF는 단일 fixed segment이고 reference KERNEL.EXF는 링커가 만든
   다중 relocatable-physical segment를 사용
 - Secure Boot와 image signature 없음

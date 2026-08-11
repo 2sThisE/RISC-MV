@@ -127,7 +127,9 @@ path=.\disk.img;create=67108864
 
 파일의 앞뒤 공백과 마지막 줄바꿈은 제거되고 나머지 문자열이 `create()`의 `configuration`으로 전달된다. 설정 안의 상대 경로는 VM을 실행한 현재 작업 디렉터리를 기준으로 한다. 모듈 폴더가 없거나 비어 있으면 자동 연결 없이 정상적으로 시작한다.
 
-직접 지정하는 기존 방식도 유지된다.
+직접 지정하는 기존 방식도 유지된다. `modules` 폴더에서 이미 자동 연결된
+DLL을 `-d`로 다시 지정하면 별도 장치 인스턴스가 하나 더 연결된다. 하나만
+사용하려면 자동 모듈 또는 명시적 `-d` 중 한 경로만 선택한다.
 
 ```text
 .\build\main.exe -r 1024 `
@@ -153,8 +155,7 @@ path=.\disk.img;create=67108864
 ```powershell
 .\build.ps1 -e calculation -d sample_counter
 .\build\main.exe -r 1024 `
-    -l .\build\examples\calculation.bin `
-    -d .\build\devices\sample_counter.dll
+    -l .\build\examples\calculation.bin
 ```
 
 성공하면 모듈 이름, VIO 슬롯, 할당된 BAR와 IRQ가 출력된다. 이 샘플은 외부 디스플레이·USB controller·저장장치를 구현할 때 사용할 수 있는 최소 골격이다.
@@ -165,8 +166,8 @@ path=.\disk.img;create=67108864
 
 ```powershell
 .\build.ps1 -e display -d display
-.\build\main.exe -r 4096 -l .\guest.bin `
-    -d .\build\devices\display_device.dll
+.\build\main.exe -r 300000 -l .\build\examples\display_demo.bin `
+    -display headless
 ```
 
 main은 기본적으로 프레임을 헤드리스 frontend에 보관하고, Windows에서는 `-display window`로 Win32 frontend를 선택할 수 있다. frontend가 바뀌어도 장치 DLL과 게스트 드라이버 규격은 유지된다. 자세한 MMIO 규격은 `DISPLAY.md`에 있다.
@@ -177,12 +178,13 @@ main은 기본적으로 프레임을 헤드리스 frontend에 보관하고, Wind
 
 ```powershell
 .\build.ps1 -e block -d block
-.\build\main.exe -r 4096 -l .\build\examples\block_demo.bin `
-    -d .\build\devices\block_device.dll `
-    -dc "path=.\disk.img;create=4096"
+.\build\main.exe -r 4096 -l .\build\examples\block_demo.bin
 ```
 
-장치 MMIO, 오류 코드와 backing image 규칙은 `BLOCK_DEVICE.md`에 정의되어 있다.
+빌드가 생성한 `build/modules/block_device.conf`가 자동 연결 장치의 backing
+image를 지정한다. 다른 이미지나 읽기 전용 설정을 사용하려면 이 sidecar를
+수정한다. 장치 MMIO, 오류 코드와 backing image 규칙은 `BLOCK_DEVICE.md`에
+정의되어 있다.
 
 ## 키보드 장치
 
@@ -194,4 +196,7 @@ main은 기본적으로 프레임을 헤드리스 frontend에 보관하고, Wind
     -display window
 ```
 
-게스트는 VIO Hub에서 input class 장치를 검색해야 한다. `examples/keyboard_demo.asm`은 동적으로 BAR와 IRQ를 찾고 이벤트를 UART로 출력한다. 이벤트 형식과 드라이버 처리 순서는 `KEYBOARD.md`에 정의되어 있다.
+게스트는 VIO Hub에서 input class 장치를 검색해야 한다.
+`examples/keyboard/keyboard_demo.asm`은 동적으로 BAR와 IRQ를 찾고 이벤트를
+UART로 출력한다. 이벤트 형식과 드라이버 처리 순서는 `KEYBOARD.md`에
+정의되어 있다.

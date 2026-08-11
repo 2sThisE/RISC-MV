@@ -1,13 +1,20 @@
-# CVM ABI v1.0
+# RISC-VM ABI v1.0
 
 이 문서는 독립적으로 컴파일·어셈블된 코드가 함께 링크되고 호출될 수 있도록
-CVM의 C 데이터 모델, 메모리 배치와 함수 호출 규칙을 고정한다. 기계가
+RISC-VM의 C 데이터 모델, 메모리 배치와 함수 호출 규칙을 고정한다. 기계가
 명령을 실행하는 규칙은 ISA 문서가, 소프트웨어가 레지스터와 스택을 사용하는
-규칙은 이 문서가 담당한다. 기계 판독용 상수는 `include/cvm_abi.h`에 있다.
+규칙은 이 문서가 담당한다. 기계 판독용 상수는 레거시 이름의
+`include/cvm_abi.h`에 있다.
+
+이 문서는 ABI 전체 규격을 정의한다. 현재 `cvmir` bridge가 구현한 C 범위는
+정수·포인터 중심의 부분집합이며 floating/vector IR, aggregate SSA 반환 등은
+아직 지원하지 않는다. ABI에 규칙이 있다는 사실이 현재 컴파일러 지원을
+뜻하지는 않는다. 구현 범위는
+[LLVM_IR_TRANSLATOR.md](../tools/LLVM_IR_TRANSLATOR.md)를 따른다.
 
 ## 데이터 모델
 
-CVM v1은 64비트 little-endian LP64 모델을 사용한다.
+RISC-VM ABI v1은 64비트 little-endian LP64 모델을 사용한다.
 
 | C 타입 | 크기 | 정렬 |
 |---|---:|---:|

@@ -38,13 +38,13 @@ int kernel_vfs_self_test(void)
     uint8_t *boot_image = kernel_malloc(8192);
     if (boot_image == NULL) return 1;
     size_t boot_size;
-    if (!kernel_vfs_read_file("/BOOT/BOOT.CVM", boot_image, 8192,
+    if (!kernel_vfs_read_file("/BOOT/BOOT.EXF", boot_image, 8192,
                               &boot_size) ||
         boot_size < CVM_KERNEL_HEADER_SIZE) {
         kernel_free(boot_image);
         return 1;
     }
-    static const uint8_t magic[8] = CVM_KERNEL_MAGIC;
+    static const uint8_t magic[8] = RISC_VM_EXF_MAGIC;
     for (size_t i = 0; i < 8; ++i) {
         if (boot_image[i] != magic[i]) {
             kernel_free(boot_image);

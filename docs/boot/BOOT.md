@@ -70,16 +70,16 @@ PTE에 EXEC가 있더라도 변환 결과가 MMIO이면 실행할 수 없다. �
 나누어 실행한다.
 
 1. VIO Hub에서 block 장치를 찾는다.
-2. GPT header와 partition-entry CRC32를 검사하고 CVM Boot GUID를 찾는다.
-3. FAT32의 `BOOT/BOOT.CVM`을 검증·적재하고 Firmware Table을 전달한다.
-4. BOOT.CVM은 Firmware FileSize로 `BOOT/KERNEL.CVM` 크기를 얻고, 4KiB로
+2. GPT header와 partition-entry CRC32를 검사하고 레거시 CVM Boot GUID를 찾는다.
+3. FAT32의 `BOOT/BOOT.EXF`를 검증·적재하고 Firmware Table을 전달한다.
+4. BOOT.EXF는 Firmware FileSize로 `BOOT/KERNEL.EXF` 크기를 얻고, 4KiB로
    올림 정렬한 staging buffer를 RAM 상단에 동적으로 배치해 파일을 읽는다.
-5. BOOT.CVM이 kernel image를 검증하고 펌웨어 USABLE map에서 정렬된 물리
+5. BOOT.EXF가 kernel image를 검증하고 펌웨어 USABLE map에서 정렬된 물리
    first-fit 영역을 골라 LOAD/BSS를 배치한다.
 6. 임시 페이지 테이블에 loader identity map, 고정 kernel VA, RAM direct-map,
    UART alias를 만들고 BootInfo 확장에 PTBR과 주소 geometry를 기록한다.
 7. 최신 memory-map key로 `ExitBootServices`를 호출한다.
-8. BOOT.CVM이 MMU를 켜고 kernel 가상 entry에 분기한다.
+8. BOOT.EXF가 MMU를 켜고 kernel 가상 entry에 분기한다.
 
 Boot ROM의 FAT32 reader는 `0x18000..0x181FF`에 최근 FAT sector 하나를
 cache한다. 파일의 연속된 cluster run은 block 장치 한도인 최대 128 sector까지
@@ -90,17 +90,17 @@ IRQ를 사용하는 펌웨어나 커널은 VBR과 핸들러를 먼저 설치하�
 
 이 과정에는 새로운 부팅 전용 opcode가 필요하지 않다. 기존 LOAD/STORE, 비교·분기와 간접 jump만 사용한다.
 
-커널 파일과 handoff 구조는 [BOOT_FORMAT.md](BOOT_FORMAT.md)의 CVM 부팅
-ABI v1을 따른다. `vmkimg`로 raw 어셈블 결과를 `/boot/kernel.cvm`에 넣을
+커널 파일과 handoff 구조는 [BOOT_FORMAT.md](BOOT_FORMAT.md)의 RISC-VM 부팅
+ABI v1을 따른다. `vmkimg`로 raw 어셈블 결과를 `/boot/kernel.exf`에 넣을
 수 있는 형식으로 포장한다. 현재 reference kernel은 다음 명령으로 생성한다.
 
 ```powershell
 .\build.ps1 -e boot
-.\build\tools\vmkimg.exe inspect .\build\kernel\kernel.cvm
+.\build\tools\vmkimg.exe inspect .\build\kernel\kernel.exf
 ```
 
-`examples/build_kernel_stub.ps1`은 BootInfo CRC만 확인하고 종료하는 더 작은
-부트 ABI 예제로 계속 남겨 둔다.
+`examples/boot/kernel_stub.asm`은 BootInfo CRC만 확인하고 종료하는 더 작은
+부트 ABI 예제로 남겨 두며 `build.ps1 -e boot`가 `kernel_stub.exf`로 포장한다.
 
 GPT/FAT32 부팅 디스크까지 만들려면 다음 예제를 실행한다.
 
@@ -116,7 +116,7 @@ GPT/FAT32 부팅 디스크까지 만들려면 다음 예제를 실행한다.
 .\examples\boot\run_boot_demo.ps1
 ```
 
-최소 RAM profile의 물리 배치는 다음과 같다. `KERNEL.CVM` 파일이 커지면
+최소 RAM profile의 물리 배치는 다음과 같다. `KERNEL.EXF` 파일이 커지면
 staging 시작은 아래로 이동하고, 커널 메모리가 커지면 kernel end는 위로
 이동한다. 부트로더는 두 범위가 겹치면 적재를 거부한다.
 
@@ -126,24 +126,35 @@ staging 시작은 아래로 이동하고, 커널 메모리가 커지면 kernel e
 kernel_phys_base..kernel_end  동적으로 배치된 kernel LOAD/BSS/stack
 kernel_end..initial_pt_end  임시 page table (handoff 뒤 reclaimable)
 initial_pt_end..staging_start  usable RAM
-staging_start..RAM_END  page-rounded KERNEL.CVM staging
+staging_start..RAM_END  page-rounded KERNEL.EXF staging
 ```
 
-정상 출력의 마지막 열세 줄은 다음과 같다.
+정상 부팅에서는 다음 주요 성공 마커가 순서대로 출력된다. 두 user task의
+syscall 출력이 중간에 추가된다.
 
 ```text
-CVM ROM: bootloader
-CVM LOADER: start
-CVM LOADER: kernel
+RISC-VM ROM: start
+RISC-VM ROM: bootloader
+RISC-VM LOADER: start
+RISC-VM LOADER: kernel
 KERNEL: BootInfo OK
 KERNEL: PMM OK
 KERNEL: MMU ON
+KERNEL: HEAP OK
+KERNEL: STRUCTURES OK
+KERNEL: DEVICES OK
+KERNEL: VFS FAT32 RW OK
+KERNEL: USER VM OK
 KERNEL: VBR OK
+KERNEL: SYSCALL DISPATCH OK
 KERNEL: NULL PAGE BLOCKED
 KERNEL: WRITE PROTECT OK
 KERNEL: NX PROTECT OK
 KERNEL: MEMORY PROTECTION OK
 KERNEL: PAGE FAULT RECOVERED
+KERNEL: USER TASKS START
+KERNEL: USER SYSCALL OK
+KERNEL: PREEMPTIVE SCHEDULER OK
 KERNEL: READY
 ```
 
