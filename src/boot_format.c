@@ -145,7 +145,10 @@ void cvm_kernel_header_encode(uint8_t output[CVM_KERNEL_HEADER_SIZE],
     memcpy(output + 0x48, header->build_id, 16);
     write_u32_le(output + 0x58, header->header_crc32);
     write_u32_le(output + 0x5C, header->payload_crc32);
-    memcpy(output + 0x60, header->reserved, 32);
+    write_u64_le(output + 0x60, header->entry_virtual_address);
+    write_u64_le(output + 0x68, header->virtual_base);
+    write_u64_le(output + 0x70, header->virtual_size);
+    memcpy(output + 0x78, header->reserved, 8);
 }
 
 void cvm_kernel_header_decode(const uint8_t input[CVM_KERNEL_HEADER_SIZE],
@@ -170,7 +173,10 @@ void cvm_kernel_header_decode(const uint8_t input[CVM_KERNEL_HEADER_SIZE],
     memcpy(header->build_id, input + 0x48, 16);
     header->header_crc32 = read_u32_le(input + 0x58);
     header->payload_crc32 = read_u32_le(input + 0x5C);
-    memcpy(header->reserved, input + 0x60, 32);
+    header->entry_virtual_address = read_u64_le(input + 0x60);
+    header->virtual_base = read_u64_le(input + 0x68);
+    header->virtual_size = read_u64_le(input + 0x70);
+    memcpy(header->reserved, input + 0x78, 8);
 }
 
 void cvm_kernel_segment_encode(uint8_t output[CVM_KERNEL_SEGMENT_SIZE],
@@ -279,7 +285,8 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
         return fail(CVM_BOOT_FORMAT_BAD_LAYOUT,
                     error, error_size, "invalid kernel table dimensions");
     }
-    if (header.flags != 0 || header.isa_id != CVM_ISA_ID ||
+    uint64_t known_flags = CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL;
+    if ((header.flags & ~known_flags) != 0 || header.isa_id != CVM_ISA_ID ||
         header.isa_version != CVM_ISA_VERSION ||
         header.address_bits != CVM_ADDRESS_BITS ||
         header.byte_order != CVM_BYTE_ORDER_LITTLE) {
@@ -332,6 +339,29 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
                     error, error_size, "kernel payload CRC32 mismatch");
     }
 
+    int relocatable =
+        (header.flags & CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL) != 0;
+    if (relocatable) {
+        uint64_t virtual_end;
+        if (header.virtual_size == 0 ||
+            !add_u64(header.virtual_base,
+                     header.virtual_size,
+                     &virtual_end) ||
+            header.entry_virtual_address < header.virtual_base ||
+            header.entry_virtual_address >= virtual_end ||
+            header.entry_physical_address !=
+                header.entry_virtual_address - header.virtual_base) {
+            return fail(CVM_BOOT_FORMAT_BAD_LAYOUT,
+                        error, error_size,
+                        "invalid relocatable kernel address geometry");
+        }
+    } else if (header.entry_virtual_address != 0 ||
+               header.virtual_base != 0 || header.virtual_size != 0) {
+        return fail(CVM_BOOT_FORMAT_UNSUPPORTED,
+                    error, error_size,
+                    "fixed kernel contains virtual handoff fields");
+    }
+
     int entry_found = 0;
     for (uint16_t i = 0; i < header.segment_count; ++i) {
         const uint8_t *encoded = image + table_offset +
@@ -363,6 +393,23 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
                         error, error_size, "load segment address overflow");
         }
         (void)load_end;
+        uint64_t virtual_end;
+        if (!add_u64(segment.virtual_address,
+                     segment.memory_size,
+                     &virtual_end)) {
+            return fail(CVM_BOOT_FORMAT_BAD_SEGMENT,
+                        error, error_size,
+                        "virtual segment address overflow");
+        }
+        if (relocatable &&
+            (segment.virtual_address < header.virtual_base ||
+             segment.virtual_address - header.virtual_base !=
+                 segment.load_address ||
+             virtual_end - header.virtual_base > header.virtual_size)) {
+            return fail(CVM_BOOT_FORMAT_BAD_SEGMENT,
+                        error, error_size,
+                        "relocatable segment is outside the virtual image");
+        }
 
         if (segment.file_size != 0) {
             uint64_t file_end;
@@ -389,11 +436,23 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
                 return fail(CVM_BOOT_FORMAT_BAD_SEGMENT,
                             error, error_size, "load segments overlap in RAM");
             }
+            if (ranges_overlap(segment.virtual_address,
+                               segment.memory_size,
+                               other.virtual_address,
+                               other.memory_size)) {
+                return fail(CVM_BOOT_FORMAT_BAD_SEGMENT,
+                            error, error_size,
+                            "load segments overlap virtually");
+            }
         }
 
+        uint64_t entry = relocatable ? header.entry_virtual_address
+                                     : header.entry_physical_address;
+        uint64_t segment_entry_base = relocatable ? segment.virtual_address
+                                                  : segment.load_address;
+        uint64_t segment_entry_end = relocatable ? virtual_end : load_end;
         if ((segment.flags & CVM_SEGMENT_EXECUTE) != 0 &&
-            header.entry_physical_address >= segment.load_address &&
-            header.entry_physical_address < load_end) {
+            entry >= segment_entry_base && entry < segment_entry_end) {
             entry_found = 1;
         }
     }
@@ -495,6 +554,36 @@ void cvm_boot_info_decode(const uint8_t input[CVM_BOOTINFO_HEADER_SIZE],
     memcpy(info->random_seed, input + 0xD0, 32);
     info->checksum = read_u32_le(input + 0xF0);
     memcpy(info->reserved, input + 0xF4, 12);
+}
+
+void cvm_boot_virtual_handoff_encode(
+    uint8_t output[CVM_BOOT_VIRTUAL_HANDOFF_SIZE],
+    const CvmBootVirtualHandoff *handoff)
+{
+    memset(output, 0, CVM_BOOT_VIRTUAL_HANDOFF_SIZE);
+    memcpy(output + 0x00, handoff->magic, 8);
+    write_u64_le(output + 0x08, handoff->kernel_virtual_base);
+    write_u64_le(output + 0x10, handoff->kernel_virtual_size);
+    write_u64_le(output + 0x18, handoff->initial_page_table_root);
+    write_u64_le(output + 0x20, handoff->direct_map_base);
+    write_u64_le(output + 0x28, handoff->direct_map_size);
+    write_u64_le(output + 0x30, handoff->page_table_physical_base);
+    write_u64_le(output + 0x38, handoff->page_table_physical_size);
+}
+
+void cvm_boot_virtual_handoff_decode(
+    const uint8_t input[CVM_BOOT_VIRTUAL_HANDOFF_SIZE],
+    CvmBootVirtualHandoff *handoff)
+{
+    memset(handoff, 0, sizeof(*handoff));
+    memcpy(handoff->magic, input + 0x00, 8);
+    handoff->kernel_virtual_base = read_u64_le(input + 0x08);
+    handoff->kernel_virtual_size = read_u64_le(input + 0x10);
+    handoff->initial_page_table_root = read_u64_le(input + 0x18);
+    handoff->direct_map_base = read_u64_le(input + 0x20);
+    handoff->direct_map_size = read_u64_le(input + 0x28);
+    handoff->page_table_physical_base = read_u64_le(input + 0x30);
+    handoff->page_table_physical_size = read_u64_le(input + 0x38);
 }
 
 void cvm_memory_map_entry_encode(uint8_t output[CVM_MEMORY_MAP_ENTRY_SIZE],
@@ -606,6 +695,66 @@ CvmBootFormatStatus cvm_boot_info_validate(const uint8_t *data,
         info.virtual_address_bits > 64) {
         return fail(CVM_BOOT_FORMAT_UNSUPPORTED,
                     error, error_size, "unsupported address geometry");
+    }
+
+    if ((info.flags & CVM_BOOTINFO_FLAG_MMU_ENABLED) != 0) {
+        if (info.memory_map_offset < CVM_BOOTINFO_HEADER_SIZE +
+                                         CVM_BOOT_VIRTUAL_HANDOFF_SIZE) {
+            return fail(CVM_BOOT_FORMAT_BAD_LAYOUT,
+                        error, error_size,
+                        "MMU handoff extension is missing");
+        }
+        CvmBootVirtualHandoff handoff;
+        cvm_boot_virtual_handoff_decode(
+            data + CVM_BOOTINFO_HEADER_SIZE,
+            &handoff);
+        uint64_t kernel_virtual_end;
+        uint64_t kernel_physical_end;
+        uint64_t direct_map_end;
+        uint64_t page_table_end;
+        uint64_t virtual_limit = info.virtual_address_bits == 64
+                                     ? UINT64_MAX
+                                     : UINT64_C(1) <<
+                                           info.virtual_address_bits;
+        if (memcmp(handoff.magic,
+                   CVM_BOOT_VIRTUAL_HANDOFF_MAGIC,
+                   sizeof(handoff.magic)) != 0 ||
+            handoff.kernel_virtual_size == 0 ||
+            handoff.kernel_virtual_base % info.page_size != 0 ||
+            !add_u64(handoff.kernel_virtual_base,
+                     handoff.kernel_virtual_size,
+                     &kernel_virtual_end) ||
+            kernel_virtual_end > virtual_limit ||
+            info.kernel_entry < handoff.kernel_virtual_base ||
+            info.kernel_entry >= kernel_virtual_end ||
+            info.kernel_physical_size == 0 ||
+            info.kernel_physical_base % info.page_size != 0 ||
+            !add_u64(info.kernel_physical_base,
+                     info.kernel_physical_size,
+                     &kernel_physical_end) ||
+            kernel_physical_end > ram_end ||
+            handoff.initial_page_table_root % info.page_size != 0 ||
+            handoff.direct_map_base % info.page_size != 0 ||
+            handoff.direct_map_size < info.ram_size ||
+            !add_u64(handoff.direct_map_base,
+                     handoff.direct_map_size,
+                     &direct_map_end) ||
+            direct_map_end > virtual_limit ||
+            handoff.page_table_physical_size == 0 ||
+            handoff.page_table_physical_base % info.page_size != 0 ||
+            handoff.page_table_physical_size % info.page_size != 0 ||
+            !add_u64(handoff.page_table_physical_base,
+                     handoff.page_table_physical_size,
+                     &page_table_end) ||
+            page_table_end > ram_end ||
+            handoff.initial_page_table_root <
+                handoff.page_table_physical_base ||
+            handoff.initial_page_table_root >
+                page_table_end - info.page_size) {
+            return fail(CVM_BOOT_FORMAT_BAD_LAYOUT,
+                        error, error_size,
+                        "invalid MMU handoff geometry");
+        }
     }
 
     if (info.memory_map_count == 0 ||

@@ -379,8 +379,20 @@ static int inspect_kernel(const char *path)
     printf("CVM kernel image v%u.%u\n", header.format_major,
            header.format_minor);
     printf("  file size:         %" PRIu64 "\n", header.image_file_size);
-    printf("  entry:             0x%016" PRIx64 "\n",
-           header.entry_physical_address);
+    if ((header.flags & CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL) != 0) {
+        printf("  physical layout:   relocatable\n");
+        printf("  entry virtual:     0x%016" PRIx64 "\n",
+               header.entry_virtual_address);
+        printf("  entry offset:      0x%016" PRIx64 "\n",
+               header.entry_physical_address);
+        printf("  virtual range:     0x%016" PRIx64 "+0x%016" PRIx64
+               "\n",
+               header.virtual_base,
+               header.virtual_size);
+    } else {
+        printf("  entry physical:    0x%016" PRIx64 "\n",
+               header.entry_physical_address);
+    }
     printf("  required features: 0x%016" PRIx64 "\n",
            header.required_cpu_features);
     printf("  segments:          %u\n", header.segment_count);

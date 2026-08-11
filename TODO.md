@@ -36,12 +36,46 @@ P2 고도화 대상으로 분리한다.
 - [x] 커널 entry에서 C 호출 경계를 세우고 BootInfo/CRC32/early UART를 C로 이전
 - [x] kernel entry·예외 레지스터 저장·IRET·fault probe만 assembly 경계로 정리
 - [x] UART, PMM, MMU, VBR와 page-fault/예외 정책을 C로 이전
-- [ ] 커널 heap과 기본 자료구조 구현
-- [ ] 사용자 주소 공간과 CVM 실행 이미지 loader 구현
-- [ ] syscall dispatcher와 사용자 포인터 검증 구현
-- [ ] 선점 가능한 스케줄러와 문맥 교환 구현
-- [ ] VFS, FAT32 읽기/쓰기와 block-device 커널 드라이버 구현
-- [ ] UART/키보드/디스플레이 드라이버를 커널 장치 계층에 연결
+
+### P1.1 — 고정 부트 메모리 경계 제거
+
+- [x] `0x20000..0x30000`을 부트로더 코드/stack 슬롯으로 예약하고 커널을
+  `0x30000`부터 RAM의 높은 주소 방향으로 확장하도록 재배치
+- [x] 부트로더의 고정 커널 상한 `0x20000`을 제거하고 커널 끝을 실제 RAM 및
+  동적 staging 시작 주소와 비교하도록 변경
+- [x] Firmware FileSize 결과를 4KiB로 올림 정렬하고 staging buffer를 RAM
+  상단에서 동적으로 선택
+- [x] BootInfo map에서 부트로더 슬롯은 reclaimable, 커널은 KERNEL, staging은
+  handoff 이후 usable이 되도록 정렬된 구간 유지
+- [x] 커널의 고정 가상주소, 동적 물리주소, 가상 entry와 초기 PTBR을 표현하는
+  boot image/BootInfo handoff 필드 및 검증 규칙 확정
+- [x] 부트로더가 임시 페이지 테이블을 만들고 MMU ON/OFF 두 진입 방식을
+  `CVM_BOOTINFO_FLAG_MMU_ENABLED`로 구분하도록 구현
+- [x] 전체 물리 RAM direct-map을 정의하고 PMM의 물리주소 직접 포인터 변환을
+  `phys_to_virt`/`virt_to_phys` 계층으로 교체
+- [x] 커널이 임시 페이지 테이블을 인수하거나 자체 테이블로 교체한 뒤
+  부트로더·staging·임시 page-table 페이지를 PMM에 회수
+- [x] 작은 RAM, 조각난 memory map, staging/목적지 충돌, 정렬 경계, 잘못된
+  segment 크기와 MMU ON handoff를 포함하는 부팅 회귀 테스트 추가
+
+### P1.2 — 운영체제 런타임 기반
+
+- [x] 커널 heap과 기본 자료구조 구현
+- [x] 사용자 주소 공간과 CVM 실행 이미지 loader 구현
+- [x] syscall dispatcher와 사용자 포인터 검증 구현
+- [x] 선점 가능한 스케줄러와 문맥 교환 구현
+- [x] VFS, FAT32 읽기/쓰기와 block-device 커널 드라이버 구현
+- [x] UART/키보드/디스플레이 드라이버를 커널 장치 계층에 연결
+
+### P1.3 — 프로세스와 사용자 공간 확장
+
+- 프로세스별 file descriptor table과 `open`/`close`/`seek` syscall
+- sleep/wakeup, wait/child 종료 수거와 프로세스 수명 관리
+- user page fault를 커널 panic 대신 해당 프로세스 종료/신호로 전달
+- FAT32 long-file-name, 하위 디렉터리 생성·삭제와 동시 접근 잠금
+- block 완료 IRQ를 scheduler sleep/wakeup에 연결한 비동기 kernel I/O
+- 키보드 IRQ 기반 입력 queue와 display framebuffer 사용자 API
+- 사용자 실행 파일을 VFS에서 읽어 생성하는 `exec` 경로와 초기 userland
 
 ## P2 — 도구 체인 보강
 

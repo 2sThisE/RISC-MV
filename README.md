@@ -117,13 +117,18 @@ build/
 ## 실행 예시
 
 ```powershell
-.\build\main.exe -r 4096 `
+.\build\main.exe -r 4k `
     -l .\build\examples\counter.bin
 
 .\build\tools\test_runner.exe
 
 .\examples\boot\run_boot_demo.ps1
 ```
+
+`-r/--ram`은 양의 정수 뒤에 `b`, `k`, `m`, `g` 단위를 붙일 수 있다.
+단위는 대소문자를 구분하지 않으며, 생략하거나 `b`를 쓰면 byte이고
+`k`, `m`, `g`는 각각 KiB, MiB, GiB다. 예를 들어 `-r 1m`은
+1,048,576 byte를 할당한다.
 
 부팅 예제는 ROM에서 시작해 VIO block device의 GPT/FAT32 파티션에서
 `BOOT.CVM`과 `KERNEL.CVM`을 읽는다. reference kernel은 BootInfo, PMM,
@@ -132,7 +137,8 @@ MMU, VBR, W^X와 page-fault 복구를 검사하고 성공하면 UART에
 
 장치를 빌드하면 DLL이 `build/devices`와 `build/modules`에 동시에
 생성된다. 설정이 필수인 block 장치는 `.conf`도 자동 생성되며, boot 예제를
-함께 빌드하면 생성된 `system.img`를 읽기 전용으로 연결하도록 갱신된다.
+함께 빌드하면 생성된 `system.img`를 쓰기 가능으로 연결하도록 갱신된다.
+reference kernel의 FAT32 자체 검사는 `/BOOT/KTEST.TXT`를 생성·교체한다.
 
 세부 규격은 `docs/system`, `docs/boot`, `docs/devices`, `docs/tools`,
 `docs/examples`, `docs/kernel`, `docs/tests` 아래에서 분류별로 확인할 수 있다.

@@ -20,7 +20,7 @@ static MainOptionsResult parse_arguments(size_t count,
 static void test_valid_short_options(void)
 {
     char *arguments[] = {
-        "main", "-r", "65536", "-l", "kernel.bin",
+        "main", "-r", "64k", "-l", "kernel.bin",
         "-rom", "boot.bin", "-c", "2", "-t", "3",
         "-d", "disk.dll", "-dc", "path=disk.img",
         "-display", "window"
@@ -47,7 +47,7 @@ static void test_valid_short_options(void)
 static void test_valid_long_options_and_defaults(void)
 {
     char *arguments[] = {
-        "main", "--ram", "4096", "--rom", "boot.bin"
+        "main", "--ram", "4K", "--rom", "boot.bin"
     };
     MainOptions options;
     MainOptionError error;
@@ -78,6 +78,31 @@ static void expect_error(size_t count,
     assert(strstr(error.message, message_part) != NULL);
 }
 
+static void expect_ram_size(const char *value, size_t expected)
+{
+    char *arguments[] = {
+        "main", "-r", (char *)value, "-l", "a.bin"
+    };
+    MainOptions options;
+    MainOptionError error;
+    assert(parse_arguments(sizeof(arguments) / sizeof(arguments[0]),
+                           arguments,
+                           1,
+                           &options,
+                           &error) == MAIN_OPTIONS_OK);
+    assert(options.ram_size == expected);
+}
+
+static void test_ram_units(void)
+{
+    expect_ram_size("1", 1);
+    expect_ram_size("1b", 1);
+    expect_ram_size("1B", 1);
+    expect_ram_size("1k", (size_t)1024);
+    expect_ram_size("2M", (size_t)2 * 1024 * 1024);
+    expect_ram_size("1g", (size_t)1024 * 1024 * 1024);
+}
+
 static void test_errors(void)
 {
     char *no_arguments[] = {"main"};
@@ -86,8 +111,27 @@ static void test_errors(void)
     char *missing_value[] = {"main", "-r"};
     expect_error(2, missing_value, "requires a value");
 
-    char *invalid_ram[] = {"main", "-r", "4K", "-l", "a.bin"};
-    expect_error(5, invalid_ram, "positive decimal");
+    char *invalid_ram[] = {"main", "-r", "4kb", "-l", "a.bin"};
+    expect_error(5, invalid_ram, "B/K/M/G");
+
+    char *fractional_ram[] = {"main", "-r", "1.5m", "-l", "a.bin"};
+    expect_error(5, fractional_ram, "B/K/M/G");
+
+    char *zero_ram[] = {"main", "-r", "0k", "-l", "a.bin"};
+    expect_error(5, zero_ram, "positive integer");
+
+    char *negative_ram[] = {"main", "-r", "-1g", "-l", "a.bin"};
+    expect_error(5, negative_ram, "positive integer");
+
+    char *overflow_ram[] = {
+        "main", "-r", "18446744073709551615g", "-l", "a.bin"
+    };
+    expect_error(5, overflow_ram, "B/K/M/G");
+
+    char *unit_core_count[] = {
+        "main", "-r", "4k", "-l", "a.bin", "-c", "1k"
+    };
+    expect_error(7, unit_core_count, "expected 1-");
 
     char *missing_ram[] = {"main", "-l", "a.bin"};
     expect_error(3, missing_ram, "-r/--ram");
@@ -150,6 +194,8 @@ static void test_help(void)
     assert(size != 0);
     assert(strstr(text, "Usage:") != NULL);
     assert(strstr(text, "--help") != NULL);
+    assert(strstr(text, "B/KiB/MiB/GiB") != NULL);
+    assert(strstr(text, "1k = 1024 bytes") != NULL);
     assert(strstr(text, "unavailable on this platform") != NULL);
     assert(fclose(stream) == 0);
 }
@@ -158,6 +204,7 @@ int test_main_options(void)
 {
     test_valid_short_options();
     test_valid_long_options_and_defaults();
+    test_ram_units();
     test_errors();
     test_help();
     return 0;

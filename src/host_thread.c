@@ -49,6 +49,32 @@ int host_thread_join(HostThread *thread, int *result)
     return 1;
 }
 
+int host_event_init(HostEvent *event)
+{
+    if (event == NULL) return 0;
+    event->handle = CreateEventW(NULL, FALSE, FALSE, NULL);
+    return event->handle != NULL;
+}
+
+void host_event_destroy(HostEvent *event)
+{
+    if (event == NULL || event->handle == NULL) return;
+    CloseHandle(event->handle);
+    event->handle = NULL;
+}
+
+int host_event_signal(HostEvent *event)
+{
+    return event != NULL && event->handle != NULL &&
+           SetEvent(event->handle) != 0;
+}
+
+int host_event_wait(HostEvent *event)
+{
+    return event != NULL && event->handle != NULL &&
+           WaitForSingleObject(event->handle, INFINITE) == WAIT_OBJECT_0;
+}
+
 void host_thread_sleep_milliseconds(uint32_t milliseconds)
 {
     Sleep(milliseconds);
@@ -110,6 +136,50 @@ int host_thread_join(HostThread *thread, int *result)
         *result = thread->result;
     }
     return 1;
+}
+
+int host_event_init(HostEvent *event)
+{
+    if (event == NULL || pthread_mutex_init(&event->mutex, NULL) != 0) {
+        return 0;
+    }
+    if (pthread_cond_init(&event->condition, NULL) != 0) {
+        (void)pthread_mutex_destroy(&event->mutex);
+        return 0;
+    }
+    event->signaled = 0;
+    return 1;
+}
+
+void host_event_destroy(HostEvent *event)
+{
+    if (event == NULL) return;
+    (void)pthread_cond_destroy(&event->condition);
+    (void)pthread_mutex_destroy(&event->mutex);
+}
+
+int host_event_signal(HostEvent *event)
+{
+    if (event == NULL || pthread_mutex_lock(&event->mutex) != 0) return 0;
+    event->signaled = 1;
+    int result = pthread_cond_signal(&event->condition) == 0;
+    (void)pthread_mutex_unlock(&event->mutex);
+    return result;
+}
+
+int host_event_wait(HostEvent *event)
+{
+    if (event == NULL || pthread_mutex_lock(&event->mutex) != 0) return 0;
+    int result = 1;
+    while (!event->signaled) {
+        if (pthread_cond_wait(&event->condition, &event->mutex) != 0) {
+            result = 0;
+            break;
+        }
+    }
+    if (result) event->signaled = 0;
+    (void)pthread_mutex_unlock(&event->mutex);
+    return result;
 }
 
 void host_thread_sleep_milliseconds(uint32_t milliseconds)

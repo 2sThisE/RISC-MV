@@ -1,9 +1,6 @@
 #include "ram.h"
 
-#include <errno.h>
-#include <inttypes.h>
 #include <stdint.h>
-#include <stdlib.h>
 
 static int ram_range_valid(const RAM *ram,
                            uint64_t address,
@@ -386,26 +383,39 @@ void ram_memory_fence(void)
 
 int parse_ram_size(const char *text, size_t *result)
 {
-    if (text == NULL || *text == '\0') {
+    if (text == NULL || result == NULL || *text == '\0') {
         return 0;
     }
 
-    /* 부호, 공백, 소수점, 문자가 섞인 입력은 허용하지 않는다. */
-    for (const char *p = text; *p != '\0'; ++p) {
-        if (*p < '0' || *p > '9') {
+    const char *cursor = text;
+    size_t value = 0;
+    while (*cursor >= '0' && *cursor <= '9') {
+        size_t digit = (size_t)(*cursor - '0');
+        if (value > (SIZE_MAX - digit) / 10) return 0;
+        value = value * 10 + digit;
+        ++cursor;
+    }
+    if (cursor == text || value == 0) return 0;
+
+    size_t multiplier = 1;
+    if (*cursor != '\0') {
+        char unit = *cursor++;
+        if (*cursor != '\0') return 0;
+        if (unit >= 'A' && unit <= 'Z') {
+            unit = (char)(unit - 'A' + 'a');
+        }
+        if (unit == 'b') multiplier = 1;
+        else if (unit == 'k') multiplier = (size_t)1024;
+        else if (unit == 'm') multiplier = (size_t)1024 * 1024;
+        else if (unit == 'g') {
+            multiplier = (size_t)1024 * 1024 * 1024;
+        } else {
             return 0;
         }
     }
 
-    errno = 0;
-    char *end = NULL;
-    uintmax_t value = strtoumax(text, &end, 10);
+    if (value > SIZE_MAX / multiplier) return 0;
 
-    if (errno == ERANGE || end == text || *end != '\0' ||
-        value == 0 || value > SIZE_MAX) {
-        return 0;
-    }
-
-    *result = (size_t)value;
+    *result = value * multiplier;
     return 1;
 }

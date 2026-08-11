@@ -12,7 +12,7 @@
 | `0x08` | `VERSION` | 장치 규격 version, 현재 1 |
 | `0x10` | `FEATURES` | 플랫폼 기능 비트 |
 | `0x18` | `RAM_BASE` | 현재 0 |
-| `0x20` | `RAM_SIZE` | `-r/--ram`으로 지정된 byte 수 |
+| `0x20` | `RAM_SIZE` | `-r/--ram` 입력을 b/KiB/MiB/GiB 단위에서 환산한 byte 수 |
 | `0x28` | `ROM_BASE` | Boot ROM이 없으면 0 |
 | `0x30` | `ROM_SIZE` | 실제 매핑된 ROM byte 수 |
 | `0x38` | `RESET_VECTOR` | power-on 및 warm reset 진입 주소 |

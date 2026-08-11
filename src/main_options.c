@@ -45,6 +45,21 @@ static const char *option_value(int argc,
     return argv[++*index];
 }
 
+static int parse_positive_decimal(const char *text, size_t *result)
+{
+    if (text == NULL || result == NULL || *text == '\0') return 0;
+    size_t value = 0;
+    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') return 0;
+        size_t digit = (size_t)(*cursor - '0');
+        if (value > (SIZE_MAX - digit) / 10) return 0;
+        value = value * 10 + digit;
+    }
+    if (value == 0) return 0;
+    *result = value;
+    return 1;
+}
+
 MainOptionsResult main_options_parse(int argc,
                                      char *argv[],
                                      int window_supported,
@@ -88,7 +103,7 @@ MainOptionsResult main_options_parse(int argc,
             }
             if (!parse_ram_size(value, &options->ram_size)) {
                 return option_error(error,
-                                    "invalid RAM size '%s'; expected a positive decimal byte count",
+                                    "invalid RAM size '%s'; expected a positive integer with optional B/K/M/G binary unit",
                                     value);
             }
             ram_size_given = 1;
@@ -118,7 +133,7 @@ MainOptionsResult main_options_parse(int argc,
                                     "option '%s' may only be specified once",
                                     argument);
             }
-            if (!parse_ram_size(value, &options->core_count) ||
+            if (!parse_positive_decimal(value, &options->core_count) ||
                 options->core_count > VM_MAX_CORES) {
                 return option_error(error,
                                     "invalid core count '%s'; expected 1-%u",
@@ -134,7 +149,7 @@ MainOptionsResult main_options_parse(int argc,
                                     "option '%s' may only be specified once",
                                     argument);
             }
-            if (!parse_ram_size(value, &options->threads_per_core) ||
+            if (!parse_positive_decimal(value, &options->threads_per_core) ||
                 options->threads_per_core > VM_MAX_THREADS_PER_CORE) {
                 return option_error(
                     error,
@@ -221,13 +236,14 @@ void main_options_print_help(FILE *stream,
     const char *program = program_name != NULL ? program_name : "main";
     fprintf(stream,
             "Usage:\n"
-            "  %s -r BYTES -l FILE [OPTIONS]\n"
-            "  %s -r BYTES -rom FILE [OPTIONS]\n"
+            "  %s -r SIZE -l FILE [OPTIONS]\n"
+            "  %s -r SIZE -rom FILE [OPTIONS]\n"
             "\n"
             "Run the custom 64-bit VM from a RAM image, a Boot ROM, or both.\n"
             "\n"
             "Required:\n"
-            "  -r, --ram BYTES           RAM size as a positive decimal byte count\n"
+            "  -r, --ram SIZE            RAM bytes; optional b/k/m/g suffix uses B/KiB/MiB/GiB\n"
+            "                            (case-insensitive; for example 1k = 1024 bytes)\n"
             "\n"
             "Boot sources (at least one):\n"
             "  -l, --load FILE           Load a raw binary at RAM address 1\n"
@@ -246,9 +262,9 @@ void main_options_print_help(FILE *stream,
             "  -h, --help                 Show this help and exit\n"
             "\n"
             "Examples:\n"
-            "  %s -r 4096 -l program.bin\n"
-            "  %s -r 4096 -rom boot_rom.bin\n"
-            "  %s -r 65536 -rom boot_rom.bin -l kernel.bin -c 2 -t 2\n",
+            "  %s -r 4k -l program.bin\n"
+            "  %s -r 1m -rom boot_rom.bin\n"
+            "  %s -r 64k -rom boot_rom.bin -l kernel.bin -c 2 -t 2\n",
             program,
             program,
             VM_MAX_CORES,

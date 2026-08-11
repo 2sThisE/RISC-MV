@@ -6,30 +6,7 @@
 #include <stdatomic.h>
 
 #include "bus.h"
-
-#define UART_MMIO_SIZE UINT64_C(48)
-#define UART_FIFO_CAPACITY 256U
-#define UART_DEFAULT_BAUD UINT64_C(115200)
-
-#define UART_TXDATA_OFFSET     UINT64_C(0)
-#define UART_RXDATA_OFFSET     UINT64_C(8)
-#define UART_STATUS_OFFSET     UINT64_C(16)
-#define UART_CONTROL_OFFSET    UINT64_C(24)
-#define UART_BAUD_OFFSET       UINT64_C(32)
-#define UART_IRQ_STATUS_OFFSET UINT64_C(40)
-
-#define UART_STATUS_RX_READY   (UINT64_C(1) << 0)
-#define UART_STATUS_TX_READY   (UINT64_C(1) << 1)
-#define UART_STATUS_RX_OVERRUN (UINT64_C(1) << 2)
-#define UART_STATUS_TX_OVERRUN (UINT64_C(1) << 3)
-#define UART_STATUS_TX_EMPTY   (UINT64_C(1) << 4)
-
-#define UART_CONTROL_ENABLE        (UINT64_C(1) << 0)
-#define UART_CONTROL_RX_IRQ_ENABLE (UINT64_C(1) << 1)
-#define UART_CONTROL_TX_IRQ_ENABLE (UINT64_C(1) << 2)
-
-#define UART_IRQ_RX_PENDING (UINT64_C(1) << 0)
-#define UART_IRQ_TX_PENDING (UINT64_C(1) << 1)
+#include "builtin_device_protocol.h"
 
 typedef void (*UartTxCallback)(void *context, uint8_t value);
 

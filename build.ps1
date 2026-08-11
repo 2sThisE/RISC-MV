@@ -389,7 +389,10 @@ function Build-Kernel {
         -o (Join-Path $output 'kernel.o')
     Assert-LastExitCode 'kernel assembly'
     $kernelCObjects = @()
-    foreach ($sourceName in @('kernel_main.c', 'pmm.c', 'mmu.c', 'exception.c')) {
+    foreach ($sourceName in @('kernel_main.c', 'pmm.c', 'mmu.c', 'heap.c',
+                               'runtime.c', 'address_space.c', 'user_loader.c',
+                               'devices.c', 'fat32.c', 'vfs.c',
+                               'syscall.c', 'scheduler.c', 'exception.c')) {
         $objectName = [System.IO.Path]::ChangeExtension($sourceName, '.o')
         $objectPath = Join-Path $output $objectName
         & $clangDriver (Join-Path $ProjectRoot "kernel\$sourceName") `
@@ -409,7 +412,8 @@ function Build-Kernel {
         (Join-Path $output 'layout_end.o'),
         (Join-Path $BuildRoot 'sysroot\lib\libcvm.a'),
         '-o', (Join-Path $output 'kernel.cvm'),
-        '--base', '0x10000', '--entry', 'kernel_entry',
+        '--base', '0x40000000', '--entry', 'kernel_entry',
+        '--physical-relocatable',
         '--map', $kernelMap
     )
     & $linker @kernelLinkArguments
@@ -421,8 +425,27 @@ function Build-Kernel {
         throw 'kernel link: kernel_bss_end is missing from the map file'
     }
     $kernelEnd = [Convert]::ToUInt64($kernelEndLine.Matches[0].Groups[1].Value, 16)
-    if ($kernelEnd -gt 0x20000) {
-        throw ('kernel link: image memory ends at 0x{0:X}; boot protocol limit is 0x20000' -f $kernelEnd)
+    $kernelImageSize = [uint64](Get-Item -LiteralPath `
+        (Join-Path $output 'kernel.cvm')).Length
+    $minimumStagingSize = [uint64]([Math]::Ceiling(
+        $kernelImageSize / 4096.0) * 4096)
+    if ($minimumStagingSize -gt 0xD0000) {
+        throw ('kernel link: page-rounded image file size 0x{0:X} leaves no staging space above kernel base 0x30000 in the 1 MiB minimum RAM profile' -f `
+            $minimumStagingSize)
+    }
+    $kernelSpan = $kernelEnd - [uint64]0x40000000
+    $minimumStagingStart = [uint64](0x100000 - $minimumStagingSize)
+    $kernelPhysicalSpan = [uint64]([Math]::Ceiling(
+        $kernelSpan / 4096.0) * 4096)
+    $kernelLevel0Tables = [uint64][Math]::Ceiling(
+        $kernelSpan / 2097152.0)
+    # root + low identity (2) + kernel L1/L0 + direct-map L1/L0 + UART L0
+    $minimumPageTableSize = [uint64](7 + $kernelLevel0Tables) * 4096
+    $minimumPageTableEnd = [uint64]0x30000 + $kernelPhysicalSpan +
+                           $minimumPageTableSize
+    if ($minimumPageTableEnd -gt $minimumStagingStart) {
+        throw ('kernel link: relocated image span 0x{0:X} plus initial page tables 0x{1:X} exceed minimum-RAM staging boundary 0x{2:X}' -f `
+            $kernelSpan, $minimumPageTableSize, $minimumStagingStart)
     }
 }
 
@@ -557,12 +580,12 @@ function Build-BootExample {
     Assert-LastExitCode 'bootloader packaging'
 
     & $assembler (Join-Path $ProjectRoot 'examples\boot\kernel_stub.asm') `
-        -o (Join-Path $output 'kernel_stub.bin') --base 0x10000 `
+        -o (Join-Path $output 'kernel_stub.bin') --base 0x30000 `
         --symbols (Join-Path $symbolOutput 'kernel_stub.sym')
     Assert-LastExitCode 'kernel stub assembly'
     & $imageTool pack (Join-Path $output 'kernel_stub.bin') `
         -o (Join-Path $output 'kernel_stub.cvm') `
-        --load 0x10000 --entry 0x10000 --memory-size 0x1000
+        --load 0x30000 --entry 0x30000 --memory-size 0x1000
     Assert-LastExitCode 'kernel stub packaging'
 
     $diskPath = Join-Path $output 'system.img'
@@ -575,7 +598,7 @@ function Build-BootExample {
         --reproducible
     Assert-LastExitCode 'boot disk generation'
     if (Test-Path -LiteralPath (Join-Path $BuildRoot 'modules\block_device.dll')) {
-        $configuration = "path=$diskPath;readonly=true"
+        $configuration = "path=$diskPath;readonly=false"
         Set-Content -LiteralPath (Join-Path $BuildRoot 'modules\block_device.conf') `
             -Value $configuration -NoNewline -Encoding Ascii
     }

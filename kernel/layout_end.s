@@ -15,8 +15,8 @@ kernel_data_end:
 .global kernel_stack_bottom
 .global kernel_stack_top
 kernel_stack_bottom:
-    ; The stage-2 boot loader occupies physical memory starting at 0x20000.
-    ; Keep the reference kernel, including its bootstrap stack, below it.
+    ; The reference bootstrap stack is part of the kernel memory span. The
+    ; loader checks that this end remains below its RAM-top staging buffer.
     .space 0x6000
 kernel_stack_top:
 .global kernel_bss_end

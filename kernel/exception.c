@@ -22,7 +22,8 @@ int kernel_exception_init(void)
     kernel_vbr = kernel_pmm_alloc_page();
     if (kernel_vbr == 0) return 1;
 
-    uint64_t *vectors = (uint64_t *)kernel_vbr;
+    uint64_t *vectors = kernel_phys_to_virt(kernel_vbr);
+    if (vectors == NULL) return 1;
     for (size_t i = 0; i < KERNEL_VECTOR_ENTRY_COUNT; ++i) {
         vectors[i] = UINT64_MAX;
     }
@@ -39,6 +40,10 @@ int kernel_exception_init(void)
     vectors[KERNEL_VECTOR_EXCEPTION_BASE +
             KERNEL_EXCEPTION_STORE_PAGE_FAULT] =
         (uint64_t)(uintptr_t)kernel_page_fault_entry;
+    vectors[KERNEL_VECTOR_SYSCALL] =
+        (uint64_t)(uintptr_t)kernel_syscall_entry;
+    vectors[KERNEL_TIMER_INTERRUPT_LINE] =
+        (uint64_t)(uintptr_t)kernel_timer_entry;
 
     cvm_set_vbr((uint64_t)kernel_vbr);
     if (cvm_get_vbr() != (uint64_t)kernel_vbr) return 1;

@@ -8,6 +8,9 @@
 .global kernel_entry
 .global kernel_exception_panic_entry
 .global kernel_page_fault_entry
+.global kernel_syscall_entry
+.global kernel_timer_entry
+.global kernel_start_user
 .global kernel_probe_null_load
 .global kernel_probe_rodata_store
 .global kernel_probe_data_execute
@@ -20,6 +23,8 @@
 .extern kernel_main
 .extern kernel_handle_page_fault
 .extern kernel_exception_panic
+.extern kernel_syscall_dispatch
+.extern kernel_scheduler_timer
 .extern kernel_stack_top
 .type kernel_main, function
 .type kernel_handle_page_fault, function
@@ -87,6 +92,83 @@ kernel_page_fault_entry:
 
 kernel_page_fault_fatal:
     CALLREL kernel_exception_panic
+    HALT
+
+; A user trap frame is followed by the same fixed GPR save area for syscalls
+; and timer interrupts. C may replace the saved registers and CPU frame to
+; perform a context switch before this wrapper restores them with IRET.
+kernel_syscall_entry:
+    PUSH R0
+    PUSH R1
+    PUSH R2
+    PUSH R3
+    PUSH R4
+    PUSH R5
+    PUSH R6
+    PUSH R7
+    PUSH R8
+    PUSH R9
+    PUSH R10
+    PUSH R11
+    PUSH R12
+    PUSH R13
+    PUSH R14
+    ADDI32 SP, -8
+    MOV R0, SP
+    CALLREL kernel_syscall_dispatch
+    JUMPREL kernel_trap_restore
+
+kernel_timer_entry:
+    PUSH R0
+    PUSH R1
+    PUSH R2
+    PUSH R3
+    PUSH R4
+    PUSH R5
+    PUSH R6
+    PUSH R7
+    PUSH R8
+    PUSH R9
+    PUSH R10
+    PUSH R11
+    PUSH R12
+    PUSH R13
+    PUSH R14
+    ADDI32 SP, -8
+    MOV R0, SP
+    CALLREL kernel_scheduler_timer
+
+kernel_trap_restore:
+    ADDI32 SP, 8
+    POP R14
+    POP R13
+    POP R12
+    POP R11
+    POP R10
+    POP R9
+    POP R8
+    POP R7
+    POP R6
+    POP R5
+    POP R4
+    POP R3
+    POP R2
+    POP R1
+    POP R0
+    IRET
+
+; R0=root, R1=entry, R2=user SP. Kernel mappings are shared by every user
+; address space, so execution remains valid across SETPTBR.
+kernel_start_user:
+    MOV R14, R1
+    MOV R13, R2
+    SETPTBR R0
+    MOVI32U SP, 0x20000
+    PUSH R13
+    MOVI64 R12, 0x4000000000000010
+    PUSH R12
+    PUSH R14
+    IRET
     HALT
 
 ; The C handler replaces the saved retry PC with the exported resume label.

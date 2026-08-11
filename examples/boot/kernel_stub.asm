@@ -3,7 +3,7 @@
 .entry kernel_entry
 
 kernel_entry:
-    MOVI32U SP, 0x20000
+    MOVI32U SP, 0x40000
     MOVI32U R10, 0x8000
     CMP R0, R10
     BRCC NE, boot_failed

@@ -26,6 +26,11 @@
 
 성공하면 종료 코드 0, 테스트 실패가 있으면 1, 잘못된 옵션이면 2를 반환한다.
 
+`boot_regression` suite는 빌드된 실제 `bootloader.bin`의 서브루틴을 VM에서
+직접 실행한다. 작은 RAM 프로필, 조각난 firmware memory map, staging 충돌,
+페이지 정렬 경계, 손상된 kernel segment와 초기 MMU page table mapping을
+검증하므로 먼저 전체 빌드로 boot 산출물을 생성해야 한다.
+
 ## suite 추가
 
 1. `tests/example_test.c`를 만들고 `int test_example(void)` 함수를 구현한다.

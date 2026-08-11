@@ -20,13 +20,13 @@ ROM은 호스트의 별도 바이트 저장소를 사용하며 `Bus`에 읽기 �
 기존 직접 적재 방식은 그대로 사용할 수 있다.
 
 ```powershell
-.\build\main.exe -r 4096 -l .\build\examples\counter.bin
+.\build\main.exe -r 4k -l .\build\examples\counter.bin
 ```
 
 동일한 명령을 긴 옵션으로도 작성할 수 있다.
 
 ```powershell
-.\build\main.exe --ram 4096 --load .\build\examples\counter.bin
+.\build\main.exe --ram 4K --load .\build\examples\counter.bin
 ```
 
 이때 바이너리는 RAM 1번지에 적재되고 boot hardware thread의 PC도 1이 된다.
@@ -35,10 +35,12 @@ Boot ROM 방식은 다음과 같다.
 
 ```powershell
 .\build.ps1 -e boot
-.\build\main.exe -r 1048576 -rom .\build\examples\boot_rom.bin
+.\build\main.exe -r 1m -rom .\build\examples\boot_rom.bin
 ```
 
 `-rom`의 긴 이름은 `--rom`이다. 전체 실행 옵션은 `main.exe --help`로 확인한다.
+RAM 크기의 `b`, `k`, `m`, `g` 접미사는 대소문자를 구분하지 않으며 각각
+byte, KiB, MiB, GiB를 뜻한다. 접미사를 생략하면 byte로 해석한다.
 
 이때 RAM에 프로그램을 자동 적재하지 않고 boot PC를 `0x7FFFF00000`으로 설정한다. `-rom`과 `-l`을 동시에 사용할 수도 있다. 이 경우 PC는 ROM에서 시작하고 `-l` 파일은 RAM 1번지에 미리 적재되므로 ROM 코드가 이를 검사하거나 그 위치로 분기할 수 있다.
 
@@ -70,10 +72,19 @@ PTE에 EXEC가 있더라도 변환 결과가 MMIO이면 실행할 수 없다. �
 1. VIO Hub에서 block 장치를 찾는다.
 2. GPT header와 partition-entry CRC32를 검사하고 CVM Boot GUID를 찾는다.
 3. FAT32의 `BOOT/BOOT.CVM`을 검증·적재하고 Firmware Table을 전달한다.
-4. BOOT.CVM은 Firmware 파일 서비스로 `BOOT/KERNEL.CVM`을 읽는다.
-5. BOOT.CVM이 kernel image를 검증하고 LOAD/BSS를 RAM에 배치한다.
-6. 최신 memory-map key로 `ExitBootServices`를 호출한다.
-7. BOOT.CVM이 BootInfo를 전달하고 kernel 진입점에 분기한다.
+4. BOOT.CVM은 Firmware FileSize로 `BOOT/KERNEL.CVM` 크기를 얻고, 4KiB로
+   올림 정렬한 staging buffer를 RAM 상단에 동적으로 배치해 파일을 읽는다.
+5. BOOT.CVM이 kernel image를 검증하고 펌웨어 USABLE map에서 정렬된 물리
+   first-fit 영역을 골라 LOAD/BSS를 배치한다.
+6. 임시 페이지 테이블에 loader identity map, 고정 kernel VA, RAM direct-map,
+   UART alias를 만들고 BootInfo 확장에 PTBR과 주소 geometry를 기록한다.
+7. 최신 memory-map key로 `ExitBootServices`를 호출한다.
+8. BOOT.CVM이 MMU를 켜고 kernel 가상 entry에 분기한다.
+
+Boot ROM의 FAT32 reader는 `0x18000..0x181FF`에 최근 FAT sector 하나를
+cache한다. 파일의 연속된 cluster run은 block 장치 한도인 최대 128 sector까지
+한 번의 DMA 요청으로 읽으며, 조각난 chain이나 마지막 부분 sector는 기존
+안전한 경로로 처리한다.
 
 IRQ를 사용하는 펌웨어나 커널은 VBR과 핸들러를 먼저 설치하고 IRQ Controller에서 해당 장치 IRQ의 route와 enable 비트를 설정한 뒤 `EI`해야 한다. reset 직후 외부 IRQ는 모두 masked 상태다.
 
@@ -105,6 +116,19 @@ GPT/FAT32 부팅 디스크까지 만들려면 다음 예제를 실행한다.
 .\examples\boot\run_boot_demo.ps1
 ```
 
+최소 RAM profile의 물리 배치는 다음과 같다. `KERNEL.CVM` 파일이 커지면
+staging 시작은 아래로 이동하고, 커널 메모리가 커지면 kernel end는 위로
+이동한다. 부트로더는 두 범위가 겹치면 적재를 거부한다.
+
+```text
+0x00000..0x1FFFF  firmware/BootInfo 작업 영역
+0x20000..0x2FFFF  2차 부트로더 코드와 downward stack 슬롯
+kernel_phys_base..kernel_end  동적으로 배치된 kernel LOAD/BSS/stack
+kernel_end..initial_pt_end  임시 page table (handoff 뒤 reclaimable)
+initial_pt_end..staging_start  usable RAM
+staging_start..RAM_END  page-rounded KERNEL.CVM staging
+```
+
 정상 출력의 마지막 열세 줄은 다음과 같다.
 
 ```text
@@ -124,12 +148,12 @@ KERNEL: READY
 ```
 
 Firmware Table과 서비스 규격은 [FIRMWARE_ABI.md](FIRMWARE_ABI.md)에 있다.
-`kernel/kernel.asm`의 reference kernel은 BootInfo의 USABLE 메모리로
-free-list 물리 페이지 할당자를 만들고, 전체 RAM identity mapping과 UART
-가상주소 mapping을 구성한 뒤 MMU를 켠다. RAM은 NULL page를 제외하고
-supervisor RW로 매핑하며 커널 text=RX, rodata=R, data/stack=RW로 다시
-제한한다. 나머지 RAM도 실행 권한이 없으므로 W^X가 유지된다.
-MMU 전환 뒤에는 물리 RAM에 77-entry VBR 테이블을 만들고 동기 예외를
+`kernel` 폴더의 C reference kernel은 `0x40000000` 고정 가상주소에서 이미
+MMU가 켜진 상태로 시작한다. BootInfo의 USABLE 메모리와
+`0x100000000 + physical` direct-map으로 free-list PMM을 만들고, 자체 최종
+페이지 테이블로 교체한 뒤 초기 PT 페이지를 회수한다. 커널 text=RX,
+rodata=R, data/stack=RW이고 direct-map은 RW/NX다.
+이후 물리 RAM에 77-entry VBR 테이블을 만들고 동기 예외를
 공통 kernel panic에 연결한다. 부팅 자체 검사는 일부러 미매핑 가상주소를
 읽어 `LOAD_PAGE_FAULT`를 발생시키며, 전용 핸들러가 페이지를 매핑하고
 `IRET`으로 LOAD를 재실행해야 성공한다.

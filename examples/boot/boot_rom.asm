@@ -11,7 +11,8 @@
 ;   0x6000..0x60FF  CvmFirmwareTable
 ;   0x7000..0x7008  absolute-jump trampoline
 ;   0xF000          downward-growing firmware stack top
-;   0x40000..       staged executable image
+;   0x18000..0x181FF read-only FAT sector cache
+;   0x40000..       first-stage BOOT.CVM staging (reused after handoff)
 
 .entry boot
 
@@ -353,6 +354,8 @@ load_fat_metadata:
     ADD R10, R11
     STORE64O R3, R10, 0x38
     STORE64O R3, R8, 0x98
+    MOVI32U R10, 0
+    STORE64O R3, R10, 0x158      ; FAT cache invalid
     MOVI32U R0, 1
     RET
 load_fat_fail:
@@ -463,14 +466,25 @@ fat_next:
     STORE64O R3, R4, 0xB0
     LOAD64O R0, R3, 0x30
     ADD R0, R5
-    MOVI32U R1, 0x2000
+    LOAD64O R6, R3, 0x158
+    CMPI32 R6, 1
+    BRCC NE, fat_next_cache_miss
+    LOAD64O R6, R3, 0x160
+    CMP R0, R6
+    BRCC EQ, fat_next_cached
+fat_next_cache_miss:
+    STORE64O R3, R0, 0x160
+    MOVI32U R1, 0x18000
     MOVI32U R2, 1
     CALLREL block_read
     CMPI32 R0, 0
     BRCC EQ, fat_next_fail
     MOVI32U R3, 0x1000
+    MOVI32U R6, 1
+    STORE64O R3, R6, 0x158
+fat_next_cached:
     LOAD64O R4, R3, 0xB0
-    MOVI32U R5, 0x2000
+    MOVI32U R5, 0x18000
     ADD R5, R4
     LOAD32U R0, R5
     ANDI32 R0, 0x0FFFFFFF
@@ -1106,7 +1120,99 @@ firmware_read_file:
     STORE64O R3, R1, 0x148
 firmware_read_cluster_loop:
     MOVI32U R3, 0x1000
-    LOAD64O R0, R3, 0x130
+    LOAD64O R8, R3, 0x130       ; first cluster in this transfer
+    LOAD64O R4, R3, 0x148       ; remaining file bytes
+    LOAD64O R6, R3, 0x28        ; sectors per cluster
+    MOV R7, R6
+    SHL R7, 9                    ; bytes per cluster
+    CMP R4, R7
+    BRCC LEU, firmware_read_single_cluster
+
+    ; Build the longest consecutive full-cluster run that fits in the block
+    ; protocol's 128-sector transfer limit. A fragmented edge falls back to
+    ; the next run without assuming that the whole file is contiguous.
+    MOVI32U R11, 128
+    DIVU R11, R6                 ; device-limited cluster count
+    CMPI32 R11, 0
+    BRCC EQ, firmware_read_single_cluster
+    MOV R12, R4
+    DIVU R12, R7                 ; complete clusters left in the file
+    CMP R11, R12
+    BRCC LEU, firmware_read_run_limit_ready
+    MOV R11, R12
+firmware_read_run_limit_ready:
+    MOV R9, R8                   ; last cluster in run
+    MOVI32U R10, 1               ; run cluster count
+firmware_read_run_scan:
+    CMP R10, R11
+    BRCC GEU, firmware_read_run_scanned
+    MOV R0, R9
+    CALLREL fat_next
+    CMPI32 R0, 0
+    BRCC EQ, firmware_read_file_fail
+    MOV R12, R9
+    ADDI32 R12, 1
+    CMP R0, R12
+    BRCC NE, firmware_read_run_scanned
+    MOV R9, R0
+    ADDI32 R10, 1
+    JUMPREL firmware_read_run_scan
+
+firmware_read_run_scanned:
+    ; Record the chain successor before block_read clobbers scratch GPRs.
+    MOV R0, R9
+    CALLREL fat_next
+    CMPI32 R0, 0
+    BRCC EQ, firmware_read_file_fail
+    MOV R13, R0
+
+    MOVI32U R3, 0x1000
+    LOAD64O R6, R3, 0x28
+    MOV R5, R8
+    ADDI32 R5, -2
+    MUL R5, R6
+    LOAD64O R0, R3, 0x38
+    ADD R0, R5                   ; first data LBA
+    LOAD64O R1, R3, 0x120       ; direct destination DMA
+    MOV R2, R10
+    MUL R2, R6                   ; sector count
+    STORE64O R3, R2, 0x168
+    STORE64O R3, R10, 0x170
+    STORE64O R3, R13, 0x178
+    CALLREL block_read
+    CMPI32 R0, 0
+    BRCC EQ, firmware_read_file_fail
+
+    MOVI32U R3, 0x1000
+    LOAD64O R2, R3, 0x168
+    SHL R2, 9                    ; transferred bytes
+    LOAD64O R4, R3, 0x148
+    SUB R4, R2
+    STORE64O R3, R4, 0x148
+    LOAD64O R5, R3, 0x120
+    ADD R5, R2
+    STORE64O R3, R5, 0x120
+    LOAD64O R13, R3, 0x178
+    CMPI32 R4, 0
+    BRCC EQ, firmware_read_run_last
+    CMPI32 R13, 2
+    BRCC LTU, firmware_read_file_fail
+    MOVI32U R5, 0x0FFFFFF8
+    CMP R13, R5
+    BRCC GEU, firmware_read_file_fail
+    STORE64O R3, R13, 0x130
+    JUMPREL firmware_read_cluster_loop
+
+firmware_read_run_last:
+    MOVI32U R5, 0x0FFFFFF8
+    CMP R13, R5
+    BRCC LTU, firmware_read_file_fail
+    LOAD64O R1, R3, 0x138
+    MOVI32U R0, 0
+    JUMPREL firmware_service_restore
+
+firmware_read_single_cluster:
+    MOV R0, R8
     CALLREL read_cluster
     CMPI32 R0, 0
     BRCC EQ, firmware_read_file_fail

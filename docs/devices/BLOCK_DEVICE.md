@@ -94,6 +94,12 @@ WRITE: guest RAM --dma_read--> staging --fwrite--> disk.img
 READ : disk.img --fread--> staging --dma_write--> guest RAM
 ```
 
+worker는 짧은 주기의 `Sleep` polling을 하지 않는다. 요청 제출과 장치 종료가
+cross-platform host event를 signal하고, worker는 요청이 없을 때 event에서
+잠든다. 따라서 Windows timer 해상도에 따른 요청당 지연과 idle CPU 소비가 없다.
+이 event는 호스트 구현 내부의 wake-up 수단이며 게스트에는 MMIO `STATUS`와 IRQ
+규격만 노출된다.
+
 완료되면 `STATUS`가 `DONE` 또는 `ERROR`가 되고, IRQ가 활성화됐다면 할당된 IRQ를 발생시킨다. 현재 queue depth는 1이다. `BUSY` 중 새 명령을 제출하면 진행 중 요청은 유지되고 `BUSY` 오류 IRQ가 기록된다.
 
 LBA 범위는 `count <= capacity - lba` 형태로 검사하여 덧셈 overflow를 피한다. DMA는 Device Manager가 일반 물리 RAM 범위를 다시 검사하며 MMIO 주소에는 DMA할 수 없다.

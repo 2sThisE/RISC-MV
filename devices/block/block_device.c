@@ -50,6 +50,8 @@ typedef struct {
     atomic_int stop_requested;
     atomic_int request_pending;
     HostThread worker;
+    HostEvent request_event;
+    int event_initialized;
     int worker_started;
     uint64_t lba;
     uint64_t dma_address;
@@ -350,14 +352,13 @@ static VmBlockError execute_request(BlockDevice *device,
 static int block_worker(void *context)
 {
     BlockDevice *device = context;
-    while (!atomic_load_explicit(&device->stop_requested,
-                                 memory_order_acquire)) {
+    for (;;) {
+        if (!host_event_wait(&device->request_event)) return 0;
+        if (atomic_load_explicit(&device->stop_requested,
+                                 memory_order_acquire)) break;
         if (!atomic_exchange_explicit(&device->request_pending,
                                       0,
-                                      memory_order_acquire)) {
-            host_thread_sleep_milliseconds(1);
-            continue;
-        }
+                                      memory_order_acquire)) continue;
 
         block_lock(device);
         BlockRequest request = device->request;
@@ -419,6 +420,7 @@ static uint64_t submit_request(BlockDevice *device, uint64_t command)
     atomic_store_explicit(&device->request_pending,
                           1,
                           memory_order_release);
+    (void)host_event_signal(&device->request_event);
     return 0;
 }
 
@@ -466,7 +468,15 @@ static int block_create(const VmDeviceHostApi *host,
     atomic_init(&device->stop_requested, 0);
     atomic_init(&device->request_pending, 0);
 
+    if (!host_event_init(&device->request_event)) {
+        free(staging);
+        fclose(file);
+        free(device);
+        return 0;
+    }
+    device->event_initialized = 1;
     if (!host_thread_create(&device->worker, block_worker, device)) {
+        host_event_destroy(&device->request_event);
         free(staging);
         fclose(file);
         free(device);
@@ -493,8 +503,14 @@ static void block_destroy(void *device_context)
         return;
     }
     atomic_store_explicit(&device->stop_requested, 1, memory_order_release);
+    if (device->event_initialized) {
+        (void)host_event_signal(&device->request_event);
+    }
     if (device->worker_started) {
         (void)host_thread_join(&device->worker, NULL);
+    }
+    if (device->event_initialized) {
+        host_event_destroy(&device->request_event);
     }
     if (!device->read_only) {
         (void)block_file_flush(device->file);

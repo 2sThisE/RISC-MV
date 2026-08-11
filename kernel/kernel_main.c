@@ -4,7 +4,8 @@
 #include <cvm/mmio.h>
 
 CvmBootInfo *kernel_boot_info;
-uintptr_t kernel_uart_address = UINT64_C(0xFFFFFFFFFFFD0000);
+CvmBootVirtualHandoff kernel_virtual_handoff;
+uintptr_t kernel_uart_address = KERNEL_UART_ALIAS;
 
 static int bytes_equal(const uint8_t *left, const uint8_t *right, size_t size)
 {
@@ -55,8 +56,12 @@ static int validate_boot_info(CvmBootInfo *info, uint64_t handoff_magic)
         info->header_size != CVM_BOOTINFO_HEADER_SIZE ||
         info->total_size < CVM_BOOTINFO_HEADER_SIZE ||
         info->memory_map_entry_size != CVM_MEMORY_MAP_ENTRY_SIZE ||
-        info->page_size != KERNEL_PAGE_SIZE || info->uart_base == 0 ||
-        cvm_get_mmu() != 0) {
+        info->ram_base != 0 || info->page_size != KERNEL_PAGE_SIZE ||
+        info->uart_base == 0 ||
+        (info->flags & CVM_BOOTINFO_FLAG_MMU_ENABLED) == 0 ||
+        info->memory_map_offset < CVM_BOOTINFO_HEADER_SIZE +
+                                      CVM_BOOT_VIRTUAL_HANDOFF_SIZE ||
+        cvm_get_mmu() != 1) {
         return 1;
     }
 
@@ -77,8 +82,40 @@ static int validate_boot_info(CvmBootInfo *info, uint64_t handoff_magic)
         return 1;
     }
 
+    const CvmBootVirtualHandoff *virtual_handoff =
+        (const CvmBootVirtualHandoff *)
+            ((const uint8_t *)info + CVM_BOOTINFO_HEADER_SIZE);
+    static const uint8_t virtual_magic[8] =
+        CVM_BOOT_VIRTUAL_HANDOFF_MAGIC;
+    if (!bytes_equal(virtual_handoff->magic,
+                     virtual_magic,
+                     sizeof(virtual_magic)) ||
+        virtual_handoff->kernel_virtual_base != KERNEL_VIRTUAL_BASE ||
+        virtual_handoff->direct_map_base != KERNEL_DIRECT_MAP_BASE ||
+        virtual_handoff->direct_map_size < info->ram_size ||
+        virtual_handoff->initial_page_table_root != cvm_get_ptbr()) {
+        return 1;
+    }
+
     kernel_boot_info = info;
-    kernel_uart_address = (uintptr_t)info->uart_base;
+    for (size_t i = 0; i < sizeof(kernel_virtual_handoff.magic); ++i) {
+        kernel_virtual_handoff.magic[i] = virtual_handoff->magic[i];
+    }
+    kernel_virtual_handoff.kernel_virtual_base =
+        virtual_handoff->kernel_virtual_base;
+    kernel_virtual_handoff.kernel_virtual_size =
+        virtual_handoff->kernel_virtual_size;
+    kernel_virtual_handoff.initial_page_table_root =
+        virtual_handoff->initial_page_table_root;
+    kernel_virtual_handoff.direct_map_base =
+        virtual_handoff->direct_map_base;
+    kernel_virtual_handoff.direct_map_size =
+        virtual_handoff->direct_map_size;
+    kernel_virtual_handoff.page_table_physical_base =
+        virtual_handoff->page_table_physical_base;
+    kernel_virtual_handoff.page_table_physical_size =
+        virtual_handoff->page_table_physical_size;
+    kernel_uart_address = KERNEL_UART_ALIAS;
     return 0;
 }
 
@@ -110,10 +147,40 @@ int kernel_main(CvmBootInfo *info, uint64_t handoff_magic,
     if (kernel_pmm_self_test() != 0) {
         return fail("KERNEL ERROR: runtime PMM\n");
     }
+    if (kernel_heap_init() != 0 || kernel_heap_self_test() != 0) {
+        return fail("KERNEL ERROR: heap\n");
+    }
+    kernel_uart_puts("KERNEL: HEAP OK\n");
+
+    if (kernel_runtime_self_test() != 0) {
+        return fail("KERNEL ERROR: runtime structures\n");
+    }
+    kernel_uart_puts("KERNEL: STRUCTURES OK\n");
+
+    if (kernel_devices_init() != 0 || kernel_devices_self_test() != 0) {
+        return fail("KERNEL ERROR: devices\n");
+    }
+    kernel_uart_puts("KERNEL: DEVICES OK\n");
+
+    if (kernel_vfs_init() != 0 || kernel_vfs_self_test() != 0) {
+        return fail("KERNEL ERROR: VFS\n");
+    }
+    kernel_uart_puts("KERNEL: VFS FAT32 RW OK\n");
+
+    if (kernel_user_loader_self_test() != 0) {
+        return fail("KERNEL ERROR: user loader\n");
+    }
+    kernel_uart_puts("KERNEL: USER VM OK\n");
+
     if (kernel_exception_init() != 0) {
         return fail("KERNEL ERROR: exception init\n");
     }
     kernel_uart_puts("KERNEL: VBR OK\n");
+
+    if (kernel_syscall_self_test() != 0) {
+        return fail("KERNEL ERROR: syscall/user-copy self-test\n");
+    }
+    kernel_uart_puts("KERNEL: SYSCALL DISPATCH OK\n");
 
     if (kernel_memory_protection_self_test() != 0) {
         return fail("KERNEL ERROR: memory protection self-test\n");
@@ -123,6 +190,8 @@ int kernel_main(CvmBootInfo *info, uint64_t handoff_magic,
     if (kernel_demand_page_self_test() != 0) {
         return fail("KERNEL ERROR: demand paging self-test\n");
     }
-    kernel_uart_puts("KERNEL: READY\n");
+    if (kernel_scheduler_self_test() != 0) {
+        return fail("KERNEL ERROR: scheduler setup\n");
+    }
     return 42;
 }

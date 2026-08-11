@@ -26,7 +26,7 @@ segment payloads
 | `0x08` | 2 | format major = 1 |
 | `0x0A` | 2 | format minor = 0 |
 | `0x0C` | 4 | header size = 128 |
-| `0x10` | 8 | flags, v1에서는 0 |
+| `0x10` | 8 | flags, bit 0 = relocatable physical layout |
 | `0x18` | 4 | ISA ID = little-endian `CVM1` |
 | `0x1C` | 4 | ISA version = 1 |
 | `0x20` | 1 | address bits = 64 |
@@ -34,13 +34,16 @@ segment payloads
 | `0x22` | 2 | segment count, 1..64 |
 | `0x24` | 4 | segment entry size = 64 |
 | `0x28` | 8 | segment table file offset |
-| `0x30` | 8 | physical entry address |
+| `0x30` | 8 | fixed image: physical entry, relocatable image: entry offset |
 | `0x38` | 8 | complete image file size |
 | `0x40` | 8 | required CPU feature mask |
 | `0x48` | 16 | build ID |
 | `0x58` | 4 | header CRC32 |
 | `0x5C` | 4 | payload CRC32 |
-| `0x60` | 32 | reserved, zero |
+| `0x60` | 8 | relocatable image virtual entry, fixed image에서는 0 |
+| `0x68` | 8 | relocatable image virtual base, fixed image에서는 0 |
+| `0x70` | 8 | relocatable image virtual span, fixed image에서는 0 |
+| `0x78` | 8 | reserved, zero |
 
 Header CRC32는 `header_crc32` 필드를 0으로 보고 128바이트에 계산한다.
 Payload CRC32는 offset 128부터 파일 끝까지 계산하므로 세그먼트 테이블도
@@ -53,13 +56,16 @@ Payload CRC32는 offset 128부터 파일 끝까지 계산하므로 세그먼트 
 | `0x00` | 4 | type = LOAD(1) |
 | `0x04` | 4 | READ(1), WRITE(2), EXECUTE(4) |
 | `0x08` | 8 | file offset |
-| `0x10` | 8 | physical load address |
-| `0x18` | 8 | future virtual address |
+| `0x10` | 8 | fixed image: physical load address, relocatable image: physical offset |
+| `0x18` | 8 | virtual address |
 | `0x20` | 8 | bytes stored in file |
 | `0x28` | 8 | bytes occupied in RAM |
 | `0x30` | 8 | power-of-two alignment |
 | `0x38` | 8 | reserved, zero |
 
+`CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL`이 설정되면 `load_address`는
+부트로더가 선택한 물리 base 기준 offset이고 `virtual_address`는 링크된 고정
+주소다. 이때 `virtual_address - virtual_base == load_address`여야 한다.
 부트로더는 `file_size`만큼 복사하고 이어지는
 `memory_size - file_size` 바이트를 0으로 만든다. 진입점은 EXECUTE가
 설정된 LOAD 세그먼트 안에 있어야 한다. 부트로더는 덧셈 overflow,
@@ -71,13 +77,13 @@ Payload CRC32는 offset 128부터 파일 끝까지 계산하므로 세그먼트 
 
 | 상태 | 값 |
 |---|---|
-| `PC` | kernel physical entry |
+| `PC` | fixed image는 physical entry, relocatable image는 virtual entry |
 | `R0` | `CvmBootInfo` 물리 주소 |
 | `R1` | `CVM_BOOTINFO_HANDOFF_MAGIC` |
 | `R2` | boot hardware-thread ID |
 | `R15/SP` | 16바이트 정렬 임시 스택 top |
 | privilege | supervisor |
-| MMU | off (v1 기본) |
+| MMU | fixed image는 off, reference relocatable kernel은 on |
 | IRQ | disabled |
 | 다른 GPR | zero |
 
@@ -99,6 +105,26 @@ BOOT_INFO, INITRD, FIRMWARE, MMIO를 정의한다. 커널은 USABLE만 즉시
 할당하며 BootInfo를 필요한 곳으로 복사한 뒤 BOOTLOADER_RECLAIMABLE을
 회수할 수 있다.
 
+`CVM_BOOTINFO_FLAG_MMU_ENABLED`가 설정되면 256바이트 고정 헤더 바로 뒤에
+64바이트 `CvmBootVirtualHandoff`가 존재하고 `memory_map_offset`은 이 확장
+뒤를 가리킨다.
+
+| 확장 offset | Size | Field |
+|---:|---:|---|
+| `0x00` | 8 | magic = `CVMVIRT1` |
+| `0x08` | 8 | kernel virtual base |
+| `0x10` | 8 | kernel virtual span |
+| `0x18` | 8 | initial physical PTBR |
+| `0x20` | 8 | physical RAM direct-map virtual base |
+| `0x28` | 8 | direct-map size |
+| `0x30` | 8 | temporary page-table physical base |
+| `0x38` | 8 | temporary page-table size |
+
+reference loader는 펌웨어 USABLE map에서 커널 물리 base를 first-fit으로
+선택하고 임시 페이지 테이블에 loader identity map, kernel 고정 VA, RAM
+direct-map과 UART alias를 구성한다. 커널은 이 PTBR을 인수해 자체 테이블로
+교체한 뒤 임시 page-table 페이지를 PMM에 반환한다.
+
 전체 장치 목록은 BootInfo에 복제하지 않는다. 커널은 `vio_hub_base`와
 `system_info_base`를 root로 사용해 장치를 검색한다.
 
@@ -107,5 +133,5 @@ BOOT_INFO, INITRD, FIRMWARE, MMIO를 정의한다. 커널은 USABLE만 즉시
 - `src/boot_format.c`: kernel 이미지와 BootInfo 직렬화, CRC32와 검증
 - `tools/kernel_image`: raw 바이너리를 단일 세그먼트 kernel 이미지로 포장
 - `examples/boot/boot_rom.asm`: VIO/GPT/FAT32와 Firmware Service
-- `examples/bootloader.asm`: kernel 검증·적재, ExitBootServices, BootInfo handoff
-- 다중 세그먼트 생성: 향후 링커 단계
+- `examples/boot/bootloader.asm`: 동적 물리 배치, 초기 PTBR, MMU-on handoff
+- `tools/linker`: 다중 segment와 `--physical-relocatable` 이미지 생성

@@ -108,5 +108,6 @@ IRQ·동기 예외 핸들러는 일반 함수 ABI가 아니다. CPU 예외 프�
 문서를 따르며 `IRET` 대상의 레지스터가 필요하면 핸들러가 직접 보존한다.
 
 reference boot ABI는 커널 진입 시 `R0=CvmBootInfo 주소`,
-`R1=CVM_BOOTINFO_HANDOFF_MAGIC`을 전달한다. 커널은 supervisor 모드,
-MMU OFF 상태에서 시작한다. 부팅 코드가 제공하는 SP는 16바이트 정렬이다.
+`R1=CVM_BOOTINFO_HANDOFF_MAGIC`을 전달한다. fixed physical 이미지는 MMU OFF,
+`CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL` 이미지는 BootInfo의 초기 PTBR로 MMU가
+켜진 상태에서 시작한다. 두 경우 모두 supervisor이고 SP는 16바이트 정렬이다.

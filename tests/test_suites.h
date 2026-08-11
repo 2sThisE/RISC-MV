@@ -8,6 +8,7 @@
     X("atomic", test_atomic)                     \
     X("block_device", test_block_device)         \
     X("boot_format", test_boot_format)           \
+    X("boot_regression", test_boot_regression)   \
     X("boot_rom", test_boot_rom)                 \
     X("bus_timer", test_bus_timer)               \
     X("core_control", test_core_control)         \

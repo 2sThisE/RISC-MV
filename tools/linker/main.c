@@ -49,7 +49,8 @@ static void usage(const char *program)
 {
     fprintf(stderr,
             "Usage: %s INPUT.o... -o OUTPUT.cvm [--base ADDRESS] "
-            "[--entry SYMBOL] [--map FILE]\n", program);
+            "[--entry SYMBOL] [--map FILE] [--physical-relocatable]\n",
+            program);
 }
 
 static int parse_u64(const char *text, uint64_t *value)
@@ -509,7 +510,9 @@ static int write_map(const char *path, const CvmObjectFile *objects,
 
 static int write_image(const char *path,
                        const OutputSection output[OUTPUT_SECTION_COUNT],
-                       uint64_t entry)
+                       uint64_t entry,
+                       uint64_t virtual_base,
+                       int physical_relocatable)
 {
     uint16_t segment_count = 0;
     size_t payload_size = 0;
@@ -546,7 +549,25 @@ static int write_image(const char *path,
     header.segment_count = segment_count;
     header.segment_entry_size = CVM_KERNEL_SEGMENT_SIZE;
     header.segment_table_offset = CVM_KERNEL_HEADER_SIZE;
-    header.entry_physical_address = entry;
+    if (physical_relocatable) {
+        uint64_t virtual_end = virtual_base;
+        for (size_t i = 0; i < OUTPUT_SECTION_COUNT; ++i) {
+            if (output[i].memory_size == 0) continue;
+            if (output[i].start > UINT64_MAX - output[i].memory_size) {
+                free(image);
+                return 0;
+            }
+            uint64_t end = output[i].start + output[i].memory_size;
+            if (end > virtual_end) virtual_end = end;
+        }
+        header.flags = CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL;
+        header.entry_physical_address = entry - virtual_base;
+        header.entry_virtual_address = entry;
+        header.virtual_base = virtual_base;
+        header.virtual_size = virtual_end - virtual_base;
+    } else {
+        header.entry_physical_address = entry;
+    }
     header.image_file_size = image_size;
     cvm_kernel_header_encode(image, &header);
 
@@ -558,7 +579,9 @@ static int write_image(const char *path,
             .type = CVM_SEGMENT_LOAD,
             .flags = output[i].flags,
             .file_offset = file_cursor,
-            .load_address = output[i].start,
+            .load_address = physical_relocatable
+                                ? output[i].start - virtual_base
+                                : output[i].start,
             .virtual_address = output[i].start,
             .file_size = output[i].file_size,
             .memory_size = output[i].memory_size,
@@ -731,6 +754,7 @@ int main(int argc, char **argv)
     const char *inputs[LINKER_MAX_INPUTS];
     size_t input_count = 0;
     uint64_t base = UINT64_C(0x10000);
+    int physical_relocatable = 0;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
             output_path = argv[++i];
@@ -738,6 +762,8 @@ int main(int argc, char **argv)
             map_path = argv[++i];
         else if (strcmp(argv[i], "--entry") == 0 && i + 1 < argc)
             entry_option = argv[++i];
+        else if (strcmp(argv[i], "--physical-relocatable") == 0)
+            physical_relocatable = 1;
         else if (strcmp(argv[i], "--base") == 0 && i + 1 < argc) {
             if (!parse_u64(argv[++i], &base)) {
                 fputs("cvmlink: invalid --base address\n", stderr);
@@ -874,7 +900,11 @@ int main(int argc, char **argv)
     }
     if (okay) okay = write_map(map_path, objects, globals, global_count,
                                placements, sections);
-    if (okay) okay = write_image(output_path, sections, entry_address);
+    if (okay) okay = write_image(output_path,
+                                 sections,
+                                 entry_address,
+                                 base,
+                                 physical_relocatable);
 
     for (size_t i = 0; i < OUTPUT_SECTION_COUNT; ++i) free(sections[i].data);
     free(globals);

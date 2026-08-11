@@ -107,5 +107,6 @@ chain을 따라 exact file bytes를 복사한다. 성공 시 `R1=file size`다.
 - FAT short name과 Boot directory 파일만 지원
 - 동적 memory allocation service 없음
 - Runtime Service는 ResetSystem만 제공
-- BOOT.CVM과 KERNEL.CVM은 현재 단일 segment 생성 도구를 사용
+- BOOT.CVM은 단일 fixed segment이고 reference KERNEL.CVM은 링커가 만든
+  다중 relocatable-physical segment를 사용
 - Secure Boot와 image signature 없음

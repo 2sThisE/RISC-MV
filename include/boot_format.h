@@ -17,6 +17,8 @@
 #define CVM_BOOTINFO_HEADER_SIZE ((size_t)256)
 #define CVM_MEMORY_MAP_ENTRY_SIZE ((size_t)32)
 #define CVM_KERNEL_MAX_SEGMENTS UINT16_C(64)
+#define CVM_BOOT_VIRTUAL_HANDOFF_SIZE ((size_t)64)
+#define CVM_BOOT_VIRTUAL_HANDOFF_MAGIC "CVMVIRT1"
 
 #define CVM_ISA_ID UINT32_C(0x314D5643) /* "CVM1" in little-endian. */
 #define CVM_ISA_VERSION UINT32_C(1)
@@ -27,6 +29,10 @@
 
 enum {
     CVM_SEGMENT_LOAD = 1
+};
+
+enum {
+    CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL = UINT64_C(1) << 0
 };
 
 enum {
@@ -82,7 +88,10 @@ typedef struct {
     uint8_t build_id[16];
     uint32_t header_crc32;
     uint32_t payload_crc32;
-    uint8_t reserved[32];
+    uint64_t entry_virtual_address;
+    uint64_t virtual_base;
+    uint64_t virtual_size;
+    uint8_t reserved[8];
 } CvmKernelHeader;
 
 typedef struct {
@@ -139,6 +148,17 @@ typedef struct {
 } CvmBootInfo;
 
 typedef struct {
+    uint8_t magic[8];
+    uint64_t kernel_virtual_base;
+    uint64_t kernel_virtual_size;
+    uint64_t initial_page_table_root;
+    uint64_t direct_map_base;
+    uint64_t direct_map_size;
+    uint64_t page_table_physical_base;
+    uint64_t page_table_physical_size;
+} CvmBootVirtualHandoff;
+
+typedef struct {
     uint64_t base;
     uint64_t length;
     uint32_t type;
@@ -164,6 +184,9 @@ _Static_assert(sizeof(CvmKernelSegment) == CVM_KERNEL_SEGMENT_SIZE,
                "CvmKernelSegment layout changed");
 _Static_assert(sizeof(CvmBootInfo) == CVM_BOOTINFO_HEADER_SIZE,
                "CvmBootInfo layout changed");
+_Static_assert(sizeof(CvmBootVirtualHandoff) ==
+                   CVM_BOOT_VIRTUAL_HANDOFF_SIZE,
+               "CvmBootVirtualHandoff layout changed");
 _Static_assert(sizeof(CvmMemoryMapEntry) == CVM_MEMORY_MAP_ENTRY_SIZE,
                "CvmMemoryMapEntry layout changed");
 
@@ -190,6 +213,12 @@ void cvm_boot_info_encode(uint8_t output[CVM_BOOTINFO_HEADER_SIZE],
                           const CvmBootInfo *info);
 void cvm_boot_info_decode(const uint8_t input[CVM_BOOTINFO_HEADER_SIZE],
                           CvmBootInfo *info);
+void cvm_boot_virtual_handoff_encode(
+    uint8_t output[CVM_BOOT_VIRTUAL_HANDOFF_SIZE],
+    const CvmBootVirtualHandoff *handoff);
+void cvm_boot_virtual_handoff_decode(
+    const uint8_t input[CVM_BOOT_VIRTUAL_HANDOFF_SIZE],
+    CvmBootVirtualHandoff *handoff);
 void cvm_memory_map_entry_encode(uint8_t output[CVM_MEMORY_MAP_ENTRY_SIZE],
                                  const CvmMemoryMapEntry *entry);
 void cvm_memory_map_entry_decode(const uint8_t input[CVM_MEMORY_MAP_ENTRY_SIZE],
