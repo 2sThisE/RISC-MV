@@ -148,7 +148,7 @@ static int create_image(int argc, char **argv)
     }
     if (!has_exf_extension(bootloader_path) ||
         !has_exf_extension(kernel_path)) {
-        fputs("vmkdisk: bootloader and kernel must be RISC-VM .exf files\n",
+        fputs("vmkdisk: bootloader and kernel must be RISC-MV .exf files\n",
               stderr);
         return 2;
     }
@@ -202,7 +202,7 @@ static int create_image(int argc, char **argv)
            output_path,
            info.disk_size,
            info.total_sectors);
-    printf("  RISC-VM boot partition: LBA %" PRIu64 " + %" PRIu64 "\n",
+    printf("  RISC-MV boot partition: LBA %" PRIu64 " + %" PRIu64 "\n",
            info.partition_start_lba,
            info.partition_sectors);
     printf("  FAT32: %u sectors/cluster, %u clusters\n",
@@ -232,7 +232,7 @@ static int inspect_image(const char *path)
                 error);
         return 1;
     }
-    printf("Valid RISC-VM GPT/FAT32 boot disk\n");
+    printf("Valid RISC-MV GPT/FAT32 boot disk\n");
     printf("  image:              %s\n", path);
     printf("  size:               %" PRIu64 " bytes\n", info.disk_size);
     printf("  sectors:            %" PRIu64 "\n", info.total_sectors);

@@ -90,7 +90,7 @@ IRQ를 사용하는 펌웨어나 커널은 VBR과 핸들러를 먼저 설치하�
 
 이 과정에는 새로운 부팅 전용 opcode가 필요하지 않다. 기존 LOAD/STORE, 비교·분기와 간접 jump만 사용한다.
 
-커널 파일과 handoff 구조는 [BOOT_FORMAT.md](BOOT_FORMAT.md)의 RISC-VM 부팅
+커널 파일과 handoff 구조는 [BOOT_FORMAT.md](BOOT_FORMAT.md)의 RISC-MV 부팅
 ABI v1을 따른다. `vmkimg`로 raw 어셈블 결과를 `/boot/kernel.exf`에 넣을
 수 있는 형식으로 포장한다. 현재 reference kernel은 다음 명령으로 생성한다.
 
@@ -129,14 +129,15 @@ initial_pt_end..staging_start  usable RAM
 staging_start..RAM_END  page-rounded KERNEL.EXF staging
 ```
 
-정상 부팅에서는 다음 주요 성공 마커가 순서대로 출력된다. 두 user task의
-syscall 출력이 중간에 추가된다.
+정상 부팅에서는 다음 주요 성공 마커가 순서대로 출력된다. 3개 process의 4개
+user thread syscall 출력이 중간에 추가되며 실제 출력 순서는 선점 시점에 따라
+달라질 수 있다.
 
 ```text
-RISC-VM ROM: start
-RISC-VM ROM: bootloader
-RISC-VM LOADER: start
-RISC-VM LOADER: kernel
+RISC-MV ROM: start
+RISC-MV ROM: bootloader
+RISC-MV LOADER: start
+RISC-MV LOADER: kernel
 KERNEL: BootInfo OK
 KERNEL: PMM OK
 KERNEL: MMU ON
@@ -144,7 +145,7 @@ KERNEL: HEAP OK
 KERNEL: STRUCTURES OK
 KERNEL: DEVICES OK
 KERNEL: VFS FAT32 RW OK
-KERNEL: USER VM OK
+KERNEL: USER ADDRESS SPACE OK
 KERNEL: VBR OK
 KERNEL: SYSCALL DISPATCH OK
 KERNEL: NULL PAGE BLOCKED
@@ -153,6 +154,7 @@ KERNEL: NX PROTECT OK
 KERNEL: MEMORY PROTECTION OK
 KERNEL: PAGE FAULT RECOVERED
 KERNEL: USER TASKS START
+KERNEL: PROCESS THREAD OK
 KERNEL: USER SYSCALL OK
 KERNEL: PREEMPTIVE SCHEDULER OK
 KERNEL: READY

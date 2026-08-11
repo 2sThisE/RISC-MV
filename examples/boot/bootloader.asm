@@ -1,4 +1,4 @@
-; RISC-VM second-stage bootloader.
+; RISC-MV second-stage bootloader.
 ; Entry handoff:
 ;   R0 = CvmFirmwareTable at 0x6000
 ;   R1 = "CVMFWH01" handoff magic
@@ -172,7 +172,7 @@ firmware_console:
     RET
 
 ; ---------------------------------------------------------------------------
-; RISC-VM KERNEL.EXF v1 multi-segment validation
+; RISC-MV KERNEL.EXF v1 multi-segment validation
 
 ; R0=firmware memory-map buffer, R1=entry count. Chooses the first page-aligned
 ; USABLE range after the fixed second-stage slot that also stays below staging.
@@ -236,7 +236,7 @@ validate_kernel_image:
     STORE64O R6, R4, 0x88
     LOAD64O R3, R6, 0x30
     LOAD64 R4, R3
-    MOVI64 R5, 0x31304658454D5652 ; "RVMEXF01"
+    MOVI64 R5, 0x3130465845564D52 ; "RMVEXF01"
     CMP R4, R5
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x08
@@ -249,7 +249,7 @@ validate_kernel_image:
     CMPI32 R4, 1               ; RELOCATABLE_PHYSICAL
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x18
-    MOVI32U R5, 0x314D5652        ; "RVM1"
+    MOVI32U R5, 0x34364152        ; "RA64"
     CMP R4, R5
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x1C
@@ -995,18 +995,18 @@ loader_fatal_halt:
 kernel_name:
     .ascii "KERNEL  EXF"
 loader_message_start:
-    .ascii "RISC-VM LOADER: start\n"
+    .ascii "RISC-MV LOADER: start\n"
 loader_message_kernel:
-    .ascii "RISC-VM LOADER: kernel\n"
+    .ascii "RISC-MV LOADER: kernel\n"
 loader_message_table:
-    .ascii "RISC-VM LOADER E01: firmware\n"
+    .ascii "RISC-MV LOADER E01: firmware\n"
 loader_message_file:
-    .ascii "RISC-VM LOADER E02: KERNEL.EXF\n"
+    .ascii "RISC-MV LOADER E02: KERNEL.EXF\n"
 loader_message_bad_kernel_validate:
-    .ascii "RISC-VM LOADER E03: validate stage 0\n"
+    .ascii "RISC-MV LOADER E03: validate stage 0\n"
 loader_message_bad_kernel_load:
-    .ascii "RISC-VM LOADER E04: kernel load\n"
+    .ascii "RISC-MV LOADER E04: kernel load\n"
 loader_message_bad_kernel_mmu:
-    .ascii "RISC-VM LOADER E05: kernel MMU\n"
+    .ascii "RISC-MV LOADER E05: kernel MMU\n"
 loader_message_map:
-    .ascii "RISC-VM LOADER E06: memory map\n"
+    .ascii "RISC-MV LOADER E06: memory map\n"

@@ -1,4 +1,4 @@
-# RISC-VM 부팅 디스크 규격 v1
+# RISC-MV 부팅 디스크 규격 v1
 
 부팅 디스크는 512바이트 LBA를 사용하는 raw GPT 디스크다. 모든 정수는
 little-endian이며 GPT GUID 필드만 GPT가 정의한 mixed-endian byte order를
@@ -11,7 +11,7 @@ LBA 0                  Protective MBR
 LBA 1                  Primary GPT header
 LBA 2..33              Primary partition entries (128 * 128 bytes)
 LBA 34..2047           Alignment gap
-LBA 2048..last-33      RISC-VM FAT32 boot partition
+LBA 2048..last-33      RISC-MV FAT32 boot partition
 last-32..last-1        Backup partition entries
 last LBA               Backup GPT header
 ```
@@ -55,7 +55,7 @@ root cluster 2
    └─ KERNEL.EXF  BOOT.EXF 다음 cluster부터 연속 할당
 ```
 
-ROM은 GPT에서 RISC-VM GUID를 찾고 `BOOT/BOOT.EXF`를 실행한다. 2차 부트로더는
+ROM은 GPT에서 RISC-MV GUID를 찾고 `BOOT/BOOT.EXF`를 실행한다. 2차 부트로더는
 [FIRMWARE_ABI.md](FIRMWARE_ABI.md)의 파일 서비스를 사용해
 `BOOT/KERNEL.EXF`를 읽는다. 두 파일 모두 현재
 [BOOT_FORMAT.md](BOOT_FORMAT.md)의 검증된 segment image container를 쓴다.

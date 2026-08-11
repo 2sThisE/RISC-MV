@@ -170,7 +170,7 @@ int kernel_main(CvmBootInfo *info, uint64_t handoff_magic,
     if (kernel_user_loader_self_test() != 0) {
         return fail("KERNEL ERROR: user loader\n");
     }
-    kernel_uart_puts("KERNEL: USER VM OK\n");
+    kernel_uart_puts("KERNEL: USER ADDRESS SPACE OK\n");
 
     if (kernel_exception_init() != 0) {
         return fail("KERNEL ERROR: exception init\n");

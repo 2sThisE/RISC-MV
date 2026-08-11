@@ -38,7 +38,7 @@ $expectedExtension = if ($EmitAssembly) { '.s' } elseif ($CompileOnly) {
 }
 if (-not [System.IO.Path]::GetExtension($OutputFile).Equals(
         $expectedExtension, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "RISC-VM output for this mode requires the $expectedExtension extension"
+    throw "RArchM64 output for this mode requires the $expectedExtension extension"
 }
 $inputPath = (Resolve-Path -LiteralPath $InputFile).Path
 $toolDirectory = $PSScriptRoot
@@ -48,7 +48,7 @@ $linker = Join-Path $toolDirectory 'cvmlink.exe'
 $clang = (Get-Command clang -ErrorAction Stop).Source
 foreach ($tool in @($cvmir, $assembler, $linker)) {
     if (-not (Test-Path -LiteralPath $tool)) {
-        throw "required RISC-VM tool is missing: $tool"
+        throw "required RArchM64 tool is missing: $tool"
     }
 }
 
@@ -60,7 +60,7 @@ $sysrootInclude = if (Test-Path -LiteralPath $builtSysroot) {
 } elseif (Test-Path -LiteralPath $sourceSysroot) {
     $sourceSysroot
 } else {
-    throw 'RISC-VM sysroot headers were not found'
+    throw 'RArchM64 sysroot headers were not found'
 }
 $sysrootLibrary = Join-Path (Split-Path $toolDirectory -Parent) 'sysroot\lib'
 $defaultStartup = Join-Path $sysrootLibrary 'crt0.o'
@@ -71,7 +71,7 @@ $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) `
 New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
 try {
     $hostIr = Join-Path $temporaryRoot 'input.host.ll'
-    $normalizedIr = Join-Path $temporaryRoot 'input.riscvm.ll'
+    $normalizedIr = Join-Path $temporaryRoot 'input.rarchm64.ll'
     $object = Join-Path $temporaryRoot 'input.o'
     $clangArguments = @(
         '--target=x86_64-unknown-none-elf',
@@ -80,7 +80,7 @@ try {
         '-ffreestanding', '-fno-builtin', '-fno-stack-protector',
         '-fno-pic', '-fno-pie',
         '-nostdinc', '-isystem', $sysrootInclude,
-        '-D__RISC_VM__=1', '-D__riscvm64__=1',
+        '-D__RISC_MV__=1', '-D__RARCH_M64__=1', '-D__rarchm64__=1',
         '-D__CVM__=1', '-D__cvm64__=1'
     )
     foreach ($directory in $IncludeDirectory) {
@@ -91,7 +91,7 @@ try {
         -Description 'Clang LLVM IR generation'
 
     $content = [System.IO.File]::ReadAllText($hostIr)
-    $triple = 'target triple = "riscvm64-unknown-none"'
+    $triple = 'target triple = "rarchm64-unknown-none"'
     $layout = 'target datalayout = "e-p:64:64-i8:8-i16:16-i32:32-i64:64-f32:32-f64:64-v128:128-a:0:64-n8:16:32:64-S128"'
     $content = [regex]::Replace($content, '(?m)^target triple = .+$', $triple)
     $content = [regex]::Replace($content, '(?m)^target datalayout = .+$', $layout)
@@ -101,12 +101,12 @@ try {
     if ($EmitAssembly) {
         Invoke-Checked -Program $cvmir `
             -Arguments @('-S', $normalizedIr, '-o', $OutputFile) `
-            -Description 'RISC-VM assembly generation'
+            -Description 'RArchM64 assembly generation'
         return
     }
     Invoke-Checked -Program $cvmir `
         -Arguments @('-c', $normalizedIr, '-o', $object) `
-        -Description 'RISC-VM object generation'
+        -Description 'RArchM64 object generation'
     if ($CompileOnly) {
         Copy-Item -LiteralPath $object -Destination $OutputFile -Force
         return
@@ -115,24 +115,24 @@ try {
     $startupObject = $defaultStartup
     if ([string]::IsNullOrWhiteSpace($Startup)) {
         if (-not (Test-Path -LiteralPath $defaultStartup)) {
-            throw "default RISC-VM startup object is missing: $defaultStartup"
+            throw "default RArchM64 startup object is missing: $defaultStartup"
         }
     } else {
         $assembledStartup = Join-Path $temporaryRoot 'startup.o'
         Invoke-Checked -Program $assembler `
             -Arguments @($Startup, '-c', '-o', $assembledStartup) `
-            -Description 'RISC-VM startup assembly'
+            -Description 'RArchM64 startup assembly'
         $startupObject = $assembledStartup
     }
     if (-not (Test-Path -LiteralPath $runtimeArchive)) {
-        throw "RISC-VM runtime archive is missing: $runtimeArchive"
+        throw "RArchM64 runtime archive is missing: $runtimeArchive"
     }
     Invoke-Checked -Program $linker -Arguments @(
         $startupObject, $object, $runtimeArchive,
         '-o', $OutputFile,
         '--base', ('0x{0:X}' -f $Base),
         '--entry', $Entry
-    ) -Description 'RISC-VM EXF link'
+    ) -Description 'RISC-MV EXF link'
 } finally {
     if (Test-Path -LiteralPath $temporaryRoot) {
         Remove-Item -LiteralPath $temporaryRoot -Recurse -Force

@@ -1,4 +1,4 @@
-# RISC-VM 개발 로드맵
+# RISC-MV 개발 로드맵
 
 이 문서는 현재 구현 상태에서 실제로 남은 작업을 선행 관계와 위험도 순으로
 관리한다. 완료된 세부 작업의 전체 이력보다는 현재 기준점, 다음 구현 단계와
@@ -13,9 +13,10 @@
 
 ## 현재 기준점 — 완료
 
-### RISC-VM 아키텍처와 가상 하드웨어
+### RISC-MV와 RArchM64 가상 하드웨어
 
-- [x] 독자 64-bit little-endian ISA와 256개 opcode 공간
+- [x] RISC-MV ISA 계열과 64-bit little-endian `RArchM64` 아키텍처
+- [x] `RArchM64`의 256개 opcode 공간
 - [x] 정수, 부호 연산, 분기, call/return, atomic/fence, float와 SIMD 기초
 - [x] privilege mode, MMU, page table, 예외, VBR, syscall과 interrupt return
 - [x] timer, IRQ controller, IPI, core-control과 가상 multicore/hardware-thread
@@ -28,7 +29,7 @@
 - [x] GPT/FAT32 가상디스크와 firmware service/BootInfo handoff
 - [x] 고정 kernel VA, 동적 물리 배치, RAM direct-map과 MMU-on 진입
 - [x] 임시 page table과 bootloader/staging 메모리의 kernel 회수
-- [x] RISC-VM EXF v1: `.exf`, `RVMEXF01`, `RVM1`
+- [x] RISC-MV EXF v1: `.exf`, `RMVEXF01`, `RA64`
 - [x] 기존 `CVMKERN1`, `CVM1`, `.cvm` 실행파일 비호환 처리
 - [x] FAT cache, FSInfo next-free hint, 연속 sector batch I/O와 event 기반 host
   block worker
@@ -37,9 +38,9 @@
 
 - [x] assembler, relocatable `.o`, linker, static `.a`와 archive 추출
 - [x] 다중 `.text/.rodata/.data/.bss` segment와 W^X EXF 생성
-- [x] ABI v1.0, LP64, 16-byte stack alignment와 scalar stack argument
+- [x] RArchM64 ABI v1.0, LP64, 16-byte stack alignment와 scalar stack argument
 - [x] Clang 22 -> LLVM IR -> `cvmir` -> object/linker cross-build 경로
-- [x] `riscvm64-unknown-none` triple, sysroot, `crt0.o`, builtins와 `libcvm.a`
+- [x] `rarchm64-unknown-none` triple, sysroot, `crt0.o`, builtins와 `libcvm.a`
 - [x] 전체 build script, 35-suite test runner와 실제 boot 회귀 경로
 
 ### reference kernel P1.2
@@ -51,8 +52,9 @@
 - [x] GPT/FAT32 VFS 읽기/쓰기와 `/BOOT/KTEST.TXT` 내용 검증
 - [x] UART, block, keyboard와 display의 최소 kernel driver
 
-현재 scheduler는 고정 `KernelTask[2]` 자체 검사다. 일반 process/thread 생성,
-동적 실행, wait, file descriptor와 SMP kernel scheduler는 아직 없다.
+현재 scheduler는 동적 `KernelProcess`/`KernelThread`와 intrusive runnable queue로
+3개 process, 4개 thread를 선점 실행한다. wait, file descriptor, user fault 격리와
+SMP kernel scheduler는 아직 없다.
 
 ## P0 — 현재 차단 항목
 
@@ -64,18 +66,20 @@
 P1.3은 아래 순서를 따른다. 뒤 단계가 앞 단계의 임시 구조를 다시 뜯지 않도록
 Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 
-### P1.3-A — Process/Thread 기반과 동적 scheduler — 다음 작업
+### P1.3-A — Process/Thread 기반과 동적 scheduler — 진행 중
 
-- [ ] 고정 `KernelTask[2]`를 `KernelProcess`와 `KernelThread`로 분리
-- [ ] Process가 PID, parent, address space, FD table과 thread 목록을 소유
-- [ ] Thread가 TID, GPR/PC/FLAGS/SP, kernel stack과 scheduling 상태를 소유
-- [ ] `NEW`, `RUNNABLE`, `RUNNING`, `BLOCKED`, `ZOMBIE`, `DEAD` 상태 전이 정의
-- [ ] 고정 배열 대신 intrusive runnable queue와 동적 PID/TID 할당기 사용
-- [ ] 같은 Process의 Thread가 PTBR을 공유하고 각자 user/kernel stack을 사용
-- [ ] 주소 공간 변경 시에만 PTBR을 교체하도록 문맥 교환 경계 정리
-- [ ] `thread_create`, `thread_exit`, `yield`와 kernel 내부 생성 API 구현
-- [ ] 기존 두 user task 자체 검사를 새 구조 위에서 그대로 통과시켜 회귀 방지
-- [ ] 2개를 넘는 process와 한 process의 여러 thread를 함께 선점하는 테스트
+- [x] 고정 `KernelTask[2]`를 `KernelProcess`와 `KernelThread`로 분리
+- [ ] Process의 parent/FD table 실제 소유권과 정리 규칙 구현
+  (PID, address space와 thread 목록 소유는 완료)
+- [x] Thread가 TID, GPR/PC/FLAGS/SP, kernel stack과 scheduling 상태를 소유
+- [ ] `BLOCKED` 진입/복귀와 `DEAD` 수거를 포함한 전체 상태 전이 완성
+  (`NEW -> RUNNABLE -> RUNNING -> ZOMBIE` 경로는 완료)
+- [x] 고정 배열 대신 intrusive runnable queue와 동적 PID/TID 할당기 사용
+- [x] 같은 Process의 Thread가 PTBR을 공유하고 각자 user/kernel stack을 사용
+- [x] 주소 공간 변경 시에만 PTBR을 교체하도록 문맥 교환 경계 정리
+- [x] `thread_create`, `thread_exit`, `yield`에 해당하는 kernel 내부 경로 구현
+- [x] 기존 user syscall/선점/종료 자체 검사를 새 구조에서 통과
+- [x] 3개 process와 한 process의 2개 thread를 함께 선점하는 실제 부팅 테스트
 
 완료 조건: 고정 task 개수 없이 단일 코어에서 process와 software thread를
 동적으로 생성하고 선점할 수 있어야 한다.
@@ -83,7 +87,7 @@ Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 ### P1.3-B — 수명 관리와 user fault 격리
 
 - [ ] process/thread reference와 소유 자원 해제 순서 정의
-- [ ] thread 종료와 마지막 thread 종료를 process 종료로 연결
+- [x] thread 종료와 마지막 thread 종료를 process zombie 전환으로 연결
 - [ ] parent/child 관계, exit status, zombie와 `wait`/`waitpid` 구현
 - [ ] thread `join`과 이미 종료된 대상의 즉시 수거 규칙 구현
 - [ ] orphan 처리와 중복 wait/join 방지
@@ -98,10 +102,10 @@ Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 ### P1.3-C — VFS 기반 EXF `exec`와 초기 userland
 
 - [ ] VFS 경로에서 EXF 전체를 안전하게 읽는 loader API
-- [ ] `RVMEXF01`, `RVM1`, version, CRC32, segment 범위와 W^X 재검증
+- [ ] `RMVEXF01`, `RA64`, version, CRC32, segment 범위와 W^X 재검증
 - [ ] 새 Process/address space와 초기 Thread를 만든 뒤 원자적으로 runnable 등록
 - [ ] 실패 중간 단계에서 부분 생성된 page와 process를 전부 rollback
-- [ ] 초기 user stack의 `argc/argv/envp` RISC-VM ABI 정의
+- [ ] 초기 user stack의 `argc/argv/envp` RArchM64 ABI 정의
 - [ ] kernel이 `/BIN/INIT.EXF`를 찾아 첫 user process로 시작하는 경로
 - [ ] `vmkdisk`가 boot 파일 외 user EXF를 넣을 수 있는 manifest/input 규격
 - [ ] kernel에 내장된 user test image는 회귀 전용 fallback으로 축소
@@ -165,11 +169,11 @@ thread가 계속 실행되어야 한다.
 ### P1.3 전체 완료 조건
 
 - [ ] `/BIN/INIT.EXF`가 부팅 후 첫 process로 실행
-- [ ] 여러 process와 process 내부 여러 thread가 선점 실행
+- [x] 여러 process와 process 내부 여러 thread가 선점 실행
 - [ ] user fault가 해당 process에만 격리
 - [ ] file/keyboard/block I/O가 FD와 blocking syscall로 동작
 - [ ] process 종료 후 PMM page, heap, FD와 wait queue 누수 없음
-- [ ] 전체 unit test와 실제 GPT/FAT32 boot regression 통과
+- [x] 현재 단계 전체 unit test와 실제 GPT/FAT32 boot regression 통과
 
 ## P1.4 — SMP kernel과 hardware-thread 활용
 
@@ -207,7 +211,7 @@ core/hardware-thread 기능을 kernel scheduler에 연결한다.
 - [ ] indirect call, `switch`와 memory intrinsic lowering
 - [ ] float/vector IR과 scalar/vector cast lowering
 - [ ] variadic callee `va_start/va_arg`와 aggregate SSA return
-- [ ] RISC-VM integer legalization 뒤 `-O1` 이상 IR 허용
+- [ ] RArchM64 integer legalization 뒤 `-O1` 이상 IR 허용
 - [ ] 최적화 단계별 differential execution test
 
 ### P2-B — object/linker/archive
@@ -221,7 +225,7 @@ core/hardware-thread 기능을 kernel scheduler에 연결한다.
 
 ### P2-C — debugger와 진단
 
-- [ ] line table, DWARF subset 또는 RISC-VM 전용 debug 정보 결정
+- [ ] line table, DWARF subset 또는 RISC-MV 전용 debug 정보 결정
 - [ ] register/memory/MMU/exception/device 상태를 읽는 debugger protocol
 - [ ] breakpoint, single-step, watchpoint와 process/thread 선택
 - [ ] EXF build ID와 symbol/map 자동 연결
@@ -229,7 +233,7 @@ core/hardware-thread 기능을 kernel scheduler에 연결한다.
 
 ### P2-D — native LLVM backend 재평가
 
-- [ ] LLVM source tree의 native `riscvm64` TargetInfo와 builtin
+- [ ] LLVM source tree의 native `rarchm64` TargetInfo와 builtin
 - [ ] instruction selection, register info, MC object writer와 assembler
 - [ ] LLD port 비용과 현재 IR bridge 대비 빌드/실행 성능 측정
 - [ ] 유지보수 비용이 이점보다 작을 때만 기본 backend로 전환
@@ -249,7 +253,7 @@ core/hardware-thread 기능을 kernel scheduler에 연결한다.
 - [ ] dynamic loader와 shared library가 필요해질 때 ABI/EXF 확장
 - [ ] network device와 최소 network stack
 - [ ] user 권한, credential와 파일 접근 제어
-- [ ] 충분한 libc/userland 뒤 Clang/LLVM 자체를 RISC-VM용으로 cross-build
+- [ ] 충분한 libc/userland 뒤 Clang/LLVM 자체를 RISC-MV용으로 cross-build
 - [ ] native build가 가능해진 뒤 self-hosting 범위와 재현성 검증
 
 ## ABI v2 후보 — ABI v1과 섞지 않음
@@ -267,20 +271,20 @@ version, object metadata, tool 진단과 호환성 테스트를 함께 변경한
 ## 유지·폐기·보류한 방향
 
 - 기존 `Cvm*`, `CVM_*`, `cvmclang`, `cvmir`, `cvmlink`, `cvmar`, `libcvm.a`는
-  레거시 source/tool 이름으로 유지한다. 새 public 명칭은 RISC-VM/EXF를 사용한다.
+  레거시 source/tool 이름으로 유지한다. 새 public 명칭은 RISC-MV/EXF를 사용한다.
 - `.cvm` 실행파일, `CVMKERN1`과 `CVM1`은 다시 지원하지 않는다.
 - 자체 C compiler `cvmcc`는 지원과 유지보수를 종료한다. 기능 추가, 버그 수정,
   ABI/ISA 변경 추적 또는 배포 계획은 없으며 기존 lexer/parser/example/test
   소스만 현재 상태로 동결 보존한다.
-- RISC-V 호환 ISA port는 현재 RISC-VM ABI와 섞지 않고 별도 장기 project로
+- RISC-V 호환 ISA port는 현재 RArchM64 ABI와 섞지 않고 별도 장기 project로
   평가한다.
 - 무작위 kernel 물리 배치와 ASLR은 현재 필수 항목이 아니다. 보안 모델과 entropy,
   relocation 비용을 정의한 뒤 별도 제안으로 검토한다.
 
 ## 바로 시작할 작업
 
-1. `KernelProcess`/`KernelThread` 구조와 소유권 주석 작성
-2. 기존 `KernelTask[2]` 상태를 새 Thread 구조로 옮기되 동작은 유지
-3. 동적 runnable queue와 PID/TID allocator 연결
-4. 한 Process 안의 두 Thread를 포함하는 scheduler self-test 추가
-5. 전체 test와 실제 `BOOT.EXF -> KERNEL.EXF` 부팅 회귀 확인
+1. user fault를 현재 process 종료로 격리하고 다른 runnable process는 계속 실행
+2. 종료된 thread/process의 kernel stack, user page와 주소 공간 회수 순서 확정
+3. parent/child, `wait`/`waitpid`와 thread `join` 수명 규칙 구현
+4. `BLOCKED`/`DEAD` 전이와 idle 경로를 scheduler에 연결
+5. fault 격리와 반복 생성/종료 자원 누수 회귀 테스트 추가

@@ -49,7 +49,7 @@ framebuffer를 생성한다. 실행 중 문자열 렌더링이 필요하면 이 
 
 - 형식: `XRGB8888` (`FORMAT=1`), 픽셀당 4바이트
 - 최대 크기: 1920×1080
-- RISC-VM RAM에서 한 픽셀의 byte 배치는 `B, G, R, X`다.
+- RISC-MV RAM에서 한 픽셀의 byte 배치는 `B, G, R, X`다.
 - framebuffer 주소는 정렬되지 않아도 된다.
 - `STRIDE`는 최소 `WIDTH * 4`, `BUFFER_SIZE`는 최소 `STRIDE * HEIGHT`여야 한다.
 - host service ABI에 맞춰 `STRIDE`는 `UINT32_MAX` 이하여야 한다.

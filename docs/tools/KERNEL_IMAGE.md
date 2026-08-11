@@ -1,6 +1,6 @@
-# RISC-VM 커널 이미지 도구 (`vmkimg`)
+# RISC-MV 커널 이미지 도구 (`vmkimg`)
 
-`vmkimg`는 헤더 없는 raw RISC-VM 기계어를 검증 가능한 `kernel.exf` 이미지로
+`vmkimg`는 헤더 없는 raw RISC-MV 기계어를 검증 가능한 `kernel.exf` 이미지로
 포장한다. 도구는 호스트에서 실행되며 VM 안의 C 컴파일러를 요구하지 않는다.
 
 ## 빌드
@@ -23,7 +23,7 @@
 - `--entry` 기본값은 `--load`와 같다.
 - `--virtual` 기본값은 `--load`와 같다.
 - `--memory-size`는 BSS까지 포함한다. 생략하면 raw 파일 크기와 같다.
-- `--alignment` 기본값은 RISC-VM 페이지 크기인 4096이다.
+- `--alignment` 기본값은 RISC-MV 페이지 크기인 4096이다.
 - `--flags` 기본값은 `rx`이며 `r`, `w`, `x` 조합을 받는다.
 - `--features`는 커널이 요구하는 System Information feature mask다.
 - `--build-id`는 정확히 32자리인 16진수 식별자다.

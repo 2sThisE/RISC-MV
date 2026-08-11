@@ -1,4 +1,4 @@
-RISC-VM benchmark suite
+RISC-MV benchmark suite
 =======================
 
 Run the suite from the project root or directly from this directory. The script
@@ -22,4 +22,4 @@ Interpretation:
 
 Caution:
   These are guest-instruction throughput figures, not equivalent host CPU MIPS.
-  Different RISC-VM opcodes have different host-side costs.
+  Different RISC-MV opcodes have different host-side costs.

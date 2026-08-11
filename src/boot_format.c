@@ -269,9 +269,9 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
 
     CvmKernelHeader header;
     cvm_kernel_header_decode(image, &header);
-    if (memcmp(header.magic, RISC_VM_EXF_MAGIC, 8) != 0) {
+    if (memcmp(header.magic, RISC_MV_EXF_MAGIC, 8) != 0) {
         return fail(CVM_BOOT_FORMAT_BAD_MAGIC,
-                    error, error_size, "invalid RISC-VM EXF magic");
+                    error, error_size, "invalid RISC-MV EXF magic");
     }
     if (header.format_major != CVM_KERNEL_FORMAT_MAJOR ||
         header.format_minor > CVM_KERNEL_FORMAT_MINOR) {
@@ -287,12 +287,12 @@ CvmBootFormatStatus cvm_kernel_image_validate(const uint8_t *image,
     }
     uint64_t known_flags = CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL;
     if ((header.flags & ~known_flags) != 0 ||
-        header.isa_id != RISC_VM_ISA_ID ||
+        header.isa_id != RARCH_M64_ISA_ID ||
         header.isa_version != CVM_ISA_VERSION ||
         header.address_bits != CVM_ADDRESS_BITS ||
         header.byte_order != CVM_BYTE_ORDER_LITTLE) {
         return fail(CVM_BOOT_FORMAT_UNSUPPORTED,
-                    error, error_size, "EXF requires an unsupported RISC-VM ABI");
+                    error, error_size, "EXF requires an unsupported RArchM64 ABI");
     }
     if (!all_zero(header.reserved, sizeof(header.reserved))) {
         return fail(CVM_BOOT_FORMAT_UNSUPPORTED,

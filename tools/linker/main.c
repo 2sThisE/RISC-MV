@@ -550,11 +550,11 @@ static int write_image(const char *path,
         return 0;
     }
     CvmKernelHeader header = {0};
-    memcpy(header.magic, RISC_VM_EXF_MAGIC, 8);
+    memcpy(header.magic, RISC_MV_EXF_MAGIC, 8);
     header.format_major = CVM_KERNEL_FORMAT_MAJOR;
     header.format_minor = CVM_KERNEL_FORMAT_MINOR;
     header.header_size = CVM_KERNEL_HEADER_SIZE;
-    header.isa_id = RISC_VM_ISA_ID;
+    header.isa_id = RARCH_M64_ISA_ID;
     header.isa_version = CVM_ISA_VERSION;
     header.address_bits = CVM_ADDRESS_BITS;
     header.byte_order = CVM_BYTE_ORDER_LITTLE;
@@ -796,7 +796,7 @@ int main(int argc, char **argv)
         return 2;
     }
     if (!has_exf_extension(output_path)) {
-        fputs("cvmlink: RISC-VM executables require the .exf extension\n",
+        fputs("cvmlink: RISC-MV executables require the .exf extension\n",
               stderr);
         return 2;
     }

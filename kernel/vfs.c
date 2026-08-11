@@ -44,7 +44,7 @@ int kernel_vfs_self_test(void)
         kernel_free(boot_image);
         return 1;
     }
-    static const uint8_t magic[8] = RISC_VM_EXF_MAGIC;
+    static const uint8_t magic[8] = RISC_MV_EXF_MAGIC;
     for (size_t i = 0; i < 8; ++i) {
         if (boot_image[i] != magic[i]) {
             kernel_free(boot_image);

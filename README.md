@@ -1,13 +1,13 @@
-# RISC-VM
+# RISC-MV
 
-RISC-VM 아키텍처를 실행하는 가상 CPU/컴퓨터 프로젝트다. 64비트 정수, SIMD와
-부동소수점, MMU·예외·멀티코어, 동적 VIO 장치와 GPT/FAT32 부팅을
-지원한다.
+RISC-MV(Minimal Virtualization)는 이 프로젝트의 독자 ISA 계열이다. 현재
+구현하는 64비트 아키텍처는 `RArchM64`이며 64비트 정수, SIMD와 부동소수점,
+MMU·예외·멀티코어, 동적 VIO 장치와 GPT/FAT32 부팅을 지원한다.
 
-정식 실행파일 포맷은 `.exf`(RISC-VM Executable File v1)다. 기존 `.cvm`
+정식 실행파일 포맷은 `.exf`(RISC-MV Executable File v1)다. 기존 `.cvm`
 실행파일은 지원하지 않는다. `Cvm*`, `CVM_*`, `cvmclang` 같은 이름은 기존
-소스와 도구의 레거시 명칭으로 유지되지만 새 실행파일은 `RVMEXF01` magic과
-`RVM1` ISA ID만 사용한다.
+소스와 도구의 레거시 명칭으로 유지되지만 새 실행파일은 `RMVEXF01` magic과
+RArchM64를 식별하는 `RA64` ISA ID만 사용한다.
 
 자체 C 컴파일러 `cvmcc`는 지원과 유지보수가 종료됐으며 기본 빌드에서
 생성하지 않는다. 소스와 기존 테스트만 현재 상태로 보존한다. 지원되는 C
@@ -31,7 +31,7 @@ computer/
 │  ├─ hello/                    UART 출력 예제
 │  ├─ keyboard/                 keyboard 예제
 │  ├─ linker/                   다중 오브젝트 링크 예제
-│  ├─ llvm_ir/                  LLVM IR→RISC-VM 변환 예제
+│  ├─ llvm_ir/                  LLVM IR→RISC-MV 변환 예제
 │  └─ syscall/                  system call 예제
 ├─ devices/
 │  ├─ block/
@@ -154,4 +154,4 @@ reference kernel의 FAT32 자체 검사는 `/BOOT/KTEST.TXT`를 생성·교체�
 세부 규격은 `docs/system`, `docs/boot`, `docs/devices`, `docs/tools`,
 `docs/examples`, `docs/kernel`, `docs/tests` 아래에서 분류별로 확인할 수 있다.
 아키텍처 명칭과 레거시 호환 정책은
-[RISC_VM.md](docs/system/RISC_VM.md)에 정리되어 있다.
+[RISC_MV.md](docs/system/RISC_MV.md)에 정리되어 있다.

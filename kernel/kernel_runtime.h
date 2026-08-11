@@ -39,6 +39,7 @@ typedef struct {
 #define KERNEL_USER_IMAGE_LIMIT UINT64_C(0x3E000000)
 #define KERNEL_USER_STACK_TOP UINT64_C(0x3F000000)
 #define KERNEL_USER_STACK_SIZE UINT64_C(0x00010000)
+#define KERNEL_THREAD_KERNEL_STACK_SIZE ((size_t)0x00004000)
 
 typedef struct KernelAddressSpace KernelAddressSpace;
 
@@ -49,6 +50,55 @@ typedef struct {
     uintptr_t image_base;
     uintptr_t image_end;
 } KernelUserImage;
+
+typedef enum {
+    KERNEL_PROCESS_NEW = 0,
+    KERNEL_PROCESS_ACTIVE = 1,
+    KERNEL_PROCESS_ZOMBIE = 2
+} KernelProcessState;
+
+typedef enum {
+    KERNEL_THREAD_NEW = 0,
+    KERNEL_THREAD_RUNNABLE = 1,
+    KERNEL_THREAD_RUNNING = 2,
+    KERNEL_THREAD_BLOCKED = 3,
+    KERNEL_THREAD_ZOMBIE = 4,
+    KERNEL_THREAD_DEAD = 5
+} KernelThreadState;
+
+typedef struct KernelProcess KernelProcess;
+typedef struct KernelThread KernelThread;
+
+struct KernelProcess {
+    KernelListNode scheduler_node;
+    KernelList threads;
+    KernelProcess *parent;
+    void *fd_table;
+    KernelUserImage image;
+    uint64_t pid;
+    uint64_t next_stack_slot;
+    size_t thread_count;
+    size_t live_thread_count;
+    int64_t exit_status;
+    KernelProcessState state;
+};
+
+struct KernelThread {
+    KernelListNode process_node;
+    KernelListNode run_node;
+    KernelProcess *process;
+    uint64_t registers[15];
+    uint64_t pc;
+    uint64_t flags;
+    uint64_t stack_pointer;
+    uint8_t *kernel_stack;
+    uintptr_t kernel_stack_top;
+    uint64_t tid;
+    int64_t exit_status;
+    uint64_t write_count;
+    KernelThreadState state;
+    int queued;
+};
 
 void kernel_spin_init(KernelSpinLock *lock);
 void kernel_spin_lock(KernelSpinLock *lock);
@@ -95,5 +145,10 @@ int kernel_user_loader_self_test(void);
 uint8_t *kernel_user_test_program_create(const char *message,
                                          uint32_t loop_count,
                                          size_t *size);
+
+void kernel_process_system_init(void);
+KernelProcess *kernel_process_create(const uint8_t *data, size_t size);
+void kernel_process_destroy(KernelProcess *process);
+KernelThread *kernel_thread_create(KernelProcess *process);
 
 #endif

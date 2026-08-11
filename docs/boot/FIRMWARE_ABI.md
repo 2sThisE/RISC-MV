@@ -1,7 +1,7 @@
-# RISC-VM Firmware ABI v1
+# RISC-MV Firmware ABI v1
 
-RISC-VM Firmware ABI는 Boot ROM과 `BOOT.EXF` 2차 부트로더 사이의 최소 공통
-규격이다. UEFI의 System Table과 Boot Services 분리를 참고하지만, RISC-VM 독자
+RISC-MV Firmware ABI는 Boot ROM과 `BOOT.EXF` 2차 부트로더 사이의 최소 공통
+규격이다. UEFI의 System Table과 Boot Services 분리를 참고하지만, RISC-MV 독자
 ISA와 VIO 장치를 위한 별도 규격이며 UEFI 호환을 주장하지 않는다.
 
 ## 부팅 경로
@@ -27,7 +27,7 @@ Boot ROM은 GPT/FAT32와 VIO block 장치를 소유한다. 2차 부트로더는 
 | MMU | off |
 | IRQ | disabled |
 
-`BOOT.EXF`는 kernel image와 같은 검증된 `RVMEXF01` segment container를
+`BOOT.EXF`는 kernel image와 같은 검증된 `RMVEXF01` segment container를
 사용한다. 이미지의 의미는 디스크 경로와 handoff ABI로 구분한다.
 
 ## 호출 규약

@@ -1,4 +1,6 @@
-# RISC-VM instruction set
+# RISC-MV RArchM64 instruction set
+
+RArchM64는 RISC-MV ISA 계열의 64비트 아키텍처다.
 
 ## 기본 규칙
 

@@ -1,8 +1,8 @@
-; RISC-VM Boot ROM v1.
+; RISC-MV Boot ROM v1.
 ;
 ; Reset address: 0x0000007FFFF00000
 ; Required RAM: 1 MiB or more
-; Disk path: VIO storage -> GPT -> RISC-VM Boot partition -> FAT32
+; Disk path: VIO storage -> GPT -> RISC-MV Boot partition -> FAT32
 ; Second-stage path: /BOOT/BOOT.EXF
 ;
 ; Low RAM firmware layout:
@@ -576,12 +576,12 @@ stage_kernel_last_eoc_fail:
     HALT
 
 ; ---------------------------------------------------------------------------
-; RISC-VM EXF validation and loading
+; RISC-MV EXF validation and loading
 
 validate_kernel:
     MOVI32U R3, 0x40000
     LOAD64 R4, R3
-    MOVI64 R5, 0x31304658454D5652 ; "RVMEXF01"
+    MOVI64 R5, 0x3130465845564D52 ; "RMVEXF01"
     CMP R4, R5
     BRCC NE, validate_kernel_fail
     LOAD16UO R4, R3, 0x08
@@ -597,7 +597,7 @@ validate_kernel:
     CMPI32 R4, 0
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x18
-    MOVI32U R5, 0x314D5652        ; "RVM1"
+    MOVI32U R5, 0x34364152        ; "RA64"
     CMP R4, R5
     BRCC NE, validate_kernel_fail
     LOAD32UO R4, R3, 0x1C
@@ -1555,40 +1555,40 @@ fatal:
     HALT
 
 message_start:
-    .asciz "RISC-VM ROM: start\n"
+    .asciz "RISC-MV ROM: start\n"
 message_handoff:
-    .asciz "RISC-VM ROM: bootloader\n"
+    .asciz "RISC-MV ROM: bootloader\n"
 message_ram:
-    .asciz "RISC-VM ROM E01: RAM requires 1 MiB\n"
+    .asciz "RISC-MV ROM E01: RAM requires 1 MiB\n"
 message_device:
-    .asciz "RISC-VM ROM E02: no VIO block device\n"
+    .asciz "RISC-MV ROM E02: no VIO block device\n"
 message_gpt:
-    .asciz "RISC-VM ROM E03: invalid GPT\n"
+    .asciz "RISC-MV ROM E03: invalid GPT\n"
 message_gpt_header_crc:
-    .asciz "RISC-VM ROM E03A: GPT header CRC\n"
+    .asciz "RISC-MV ROM E03A: GPT header CRC\n"
 message_gpt_entries_crc:
-    .asciz "RISC-VM ROM E03B: GPT entries CRC\n"
+    .asciz "RISC-MV ROM E03B: GPT entries CRC\n"
 message_fat:
-    .asciz "RISC-VM ROM E04: invalid FAT32\n"
+    .asciz "RISC-MV ROM E04: invalid FAT32\n"
 message_io:
-    .asciz "RISC-VM ROM E05: block read failed\n"
+    .asciz "RISC-MV ROM E05: block read failed\n"
 message_bootdir:
-    .asciz "RISC-VM ROM E06: BOOT directory missing\n"
+    .asciz "RISC-MV ROM E06: BOOT directory missing\n"
 message_kernel_file:
-    .asciz "RISC-VM ROM E07: BOOT.EXF missing\n"
+    .asciz "RISC-MV ROM E07: BOOT.EXF missing\n"
 message_chain:
-    .asciz "RISC-VM ROM E08: invalid FAT chain\n"
+    .asciz "RISC-MV ROM E08: invalid FAT chain\n"
 message_chain_ram:
-    .asciz "RISC-VM ROM E08A: staging exceeds RAM\n"
+    .asciz "RISC-MV ROM E08A: staging exceeds RAM\n"
 message_chain_io:
-    .asciz "RISC-VM ROM E08B: kernel read failed\n"
+    .asciz "RISC-MV ROM E08B: kernel read failed\n"
 message_chain_next:
-    .asciz "RISC-VM ROM E08C: FAT lookup failed\n"
+    .asciz "RISC-MV ROM E08C: FAT lookup failed\n"
 message_chain_early:
-    .asciz "RISC-VM ROM E08D: early end of chain\n"
+    .asciz "RISC-MV ROM E08D: early end of chain\n"
 message_chain_last:
-    .asciz "RISC-VM ROM E08E: missing end of chain\n"
+    .asciz "RISC-MV ROM E08E: missing end of chain\n"
 message_kernel:
-    .asciz "RISC-VM ROM E09: invalid BOOT.EXF image\n"
+    .asciz "RISC-MV ROM E09: invalid BOOT.EXF image\n"
 message_bootinfo:
-    .asciz "RISC-VM ROM E10: cannot build BootInfo\n"
+    .asciz "RISC-MV ROM E10: cannot build BootInfo\n"

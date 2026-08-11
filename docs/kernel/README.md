@@ -1,6 +1,6 @@
-# RISC-VM reference kernel
+# RISC-MV reference kernel
 
-이 폴더는 펌웨어와 부트로더 다음에 실행되는 RISC-VM 기준 커널의 시작점이다.
+이 폴더는 펌웨어와 부트로더 다음에 실행되는 RISC-MV 기준 커널의 시작점이다.
 현재 커널은 다음 초기화 경로를 실제로 수행한다.
 
 1. C로 작성된 초기 bootstrap이 `CvmBootInfo` handoff와 CRC32를 검증하고
@@ -22,7 +22,7 @@
    heap을 구성하고 allocation 분할·병합·재사용과 다중 페이지 할당을 검사한다.
 10. intrusive list, 동기화 byte queue, bitmap과 spinlock 런타임을 초기화하고
     자체 검사를 수행한다.
-11. supervisor kernel mapping을 유지하는 독립 PTBR을 만들고 RISC-VM `.exf`의 CRC,
+11. supervisor kernel mapping을 유지하는 독립 PTBR을 만들고 RISC-MV `.exf`의 CRC,
     주소 범위, segment 중첩과 W^X를 검증해 user RX/R/RW page와 64KiB stack을
     적재한다. guard page와 supervisor mapping의 user 접근 차단도 검사한다.
 12. VIO hub에서 block/키보드/display 장치를 찾고 supervisor MMIO alias로
@@ -31,9 +31,11 @@
 13. syscall vector 76에 dispatcher를 연결하고 page별 user 권한을 먼저
     검증하는 `copy_from_user`/`copy_to_user`로 잘못된 포인터와 overflow를
     fault 없이 거부한다. 초기 ABI는 `exit`, `write`, `read`, `yield`, `getpid`다.
-14. 두 RISC-VM user task를 독립 주소 공간에 올리고 timer IRQ 0에서 전체 GPR,
-    PC, FLAGS, SP와 PTBR을 저장·교체한다. 두 task의 실제 syscall 출력과 종료,
-    timer 기반 선점이 모두 관측되어야 `KERNEL: READY`를 출력한다.
+14. 동적 `KernelProcess`/`KernelThread` 객체로 3개 process와 4개 thread를 만든다.
+    첫 process의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 16KiB
+    kernel stack을 사용한다. timer IRQ 0에서 전체 GPR, PC, FLAGS와 SP를
+    저장·교체하며, 주소 공간이 바뀔 때만 PTBR을 교체한다. 모든 syscall 출력,
+    종료와 timer 선점이 관측되어야 `KERNEL: READY`를 출력한다.
 
 빌드는 프로젝트 루트에서 실행한다.
 
@@ -50,11 +52,12 @@ legacy 이름의 `cvmlink`로 `kernel.exf`와 `kernel.map`을 생성한다.
 - `heap.c`: 동적 가상주소 기반 kernel heap
 - `runtime.c`: list, byte queue, bitmap과 spinlock
 - `address_space.c`: 프로세스별 page table과 user page 관리
-- `user_loader.c`: 고정 가상주소 RISC-VM EXF 사용자 이미지 loader
+- `user_loader.c`: 고정 가상주소 RISC-MV EXF 사용자 이미지 loader
+- `process.c`: 동적 PID/TID, Process/Thread 생성과 독립 stack 소유권
 - `devices.c`: VIO 검색, block/키보드/display와 내장 MMIO 장치 연결
 - `fat32.c`, `vfs.c`: FAT32 8.3 파일 읽기/쓰기와 단일 root VFS
 - `syscall.c`: dispatcher, 표준 입출력 syscall과 user-copy 검증
-- `scheduler.c`: user task, timer 선점과 trap-frame 문맥 교환
+- `scheduler.c`: intrusive runnable queue, timer 선점과 trap-frame 문맥 교환
 - `exception.c`: VBR 구성, page-fault 정책, panic과 보호 자체 검사
 - `kernel.s`: entry, 예외/trap GPR 보존, user 진입, `IRET`, fault probe
 - `layout_start.s`, `layout_end.s`: 전체 section 경계와 bootstrap stack
@@ -100,12 +103,19 @@ heap은 물리적으로 연속되지 않은 PMM 페이지를 연속된 가상주
 반환하지는 않는다. 이 정책은 초기 커널에서 주소 안정성을 유지하고 이후 page
 trim 정책을 별도로 추가할 수 있게 한다.
 
-사용자 실행 이미지는 `0x01000000..0x3E000000`에 배치하고 stack은
-`0x3EFF0000..0x3F000000`을 사용한다. stack 바로 아래 page는 guard로
-남긴다. 각 주소 공간의 root와 user leaf/table page는 독립 소유하지만 kernel
-mapping leaf는 supervisor 전용으로 공유한다. timer IRQ와 syscall은 동일한
-고정 trap-frame wrapper를 사용하고, scheduler가 frame과 PTBR을 교체한 뒤
-`IRET`하면 선택된 task의 user PC/SP에서 실행이 이어진다.
+사용자 실행 이미지는 `0x01000000..0x3E000000`에 배치한다. 첫 user stack은
+`0x3EFF0000..0x3F000000`이고 같은 process에 thread를 추가할 때마다 4KiB guard를
+사이에 두고 낮은 주소 방향으로 64KiB stack을 하나씩 추가한다. 각 thread는
+heap에서 별도 16KiB kernel stack도 받는다. 한 process의 thread는 같은 address
+space root를 공유하고, 서로 다른 process의 root와 user leaf/table page는 독립
+소유한다. kernel mapping leaf는 supervisor 전용으로 공유한다. timer IRQ와
+syscall은 동일한 trap-frame wrapper를 사용하고 scheduler가 선택된 thread의
+frame과 kernel SP를 적용한 뒤, process가 달라질 때만 PTBR을 바꾼다.
+
+현재 상태 전이는 생성 시 `NEW`, runnable queue 등록 시 `RUNNABLE`, dequeue 시
+`RUNNING`, syscall exit 시 `ZOMBIE`다. `BLOCKED` wakeup과 종료 객체를 `DEAD`로
+수거하는 수명 관리는 다음 단계이며, 마지막 thread가 종료되면 process는
+`ZOMBIE`가 된다.
 
 현재 VFS는 boot partition 하나를 `/`로 취급하며 FAT32 short 8.3 이름을
 지원한다. 파일 읽기와 같은 디렉터리 안의 파일 생성·교체는 가능하지만 LFN,

@@ -1,7 +1,7 @@
 # 폐기된 자체 C 컴파일러 (`cvmcc`)
 
 `cvmcc`는 더 이상 지원하거나 유지보수하지 않는다. 기능 추가, 버그 수정,
-RISC-VM ABI·ISA 변경 추적과 배포 계획도 없다. 기존 구현과 관련 테스트는
+RArchM64 ABI·ISA 변경 추적과 배포 계획도 없다. 기존 구현과 관련 테스트는
 개발 이력과 과거 회귀 참고를 위해 현재 상태 그대로 보존한다.
 
 기본 빌드는 `cvmcc.exe`를 생성하지 않고 `compiler` 예제도 빌드 대상으로
@@ -28,6 +28,6 @@ pointer로 사용하며 ABI v1에서 caller-saved이므로 외부 규약과 충�
 포인터·배열, 구조체·union·enum, 문자열, `for`/`switch`, `break`/`continue`,
 증감·복합 대입, stack argument, variadic, 함수 포인터, 부동소수점, 전처리기,
 최적화와 디버그 정보는 구현되지 않았다. 이 목록을 확장할 계획은 없으며,
-현재 소스는 완전한 ISO C 구현이나 지원되는 RISC-VM 컴파일러로 간주하지
+현재 소스는 완전한 ISO C 구현이나 지원되는 RISC-MV 컴파일러로 간주하지
 않는다. `test_runner`의 `compiler` suite는 보존된 구현의 기존 동작을
 기록하는 회귀 검사일 뿐 지원 또는 유지보수 약속이 아니다.

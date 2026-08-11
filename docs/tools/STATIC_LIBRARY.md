@@ -1,8 +1,8 @@
-# RISC-VM 정적 라이브러리 (legacy `CVMAR1`)
+# RISC-MV 정적 라이브러리 (legacy `CVMAR1`)
 
 정적 라이브러리는 여러 `CVMOBJ2` 오브젝트를 하나의 `.a` 파일로 묶는다.
 현재 포맷 magic은 `CVMAR1`, 버전은 1이다. 일반 Unix 도구와 같은 `.a`
-확장자를 사용하지만 내부 포맷은 RISC-VM 프로젝트 전용이므로 호스트의 `ar`로 만들지 않고
+확장자를 사용하지만 내부 포맷은 RISC-MV 프로젝트 전용이므로 호스트의 `ar`로 만들지 않고
 `cvmar`를 사용한다.
 
 ```powershell

@@ -99,7 +99,7 @@ function Resolve-Selection(
 }
 
 function Build-Main {
-    Write-Host '[main] building VM executable'
+    Write-Host '[main] building RISC-MV machine executable'
     $sources = @(
         'src\main.c',
         'src\main_options.c',
@@ -391,6 +391,7 @@ function Build-Kernel {
     $kernelCObjects = @()
     foreach ($sourceName in @('kernel_main.c', 'pmm.c', 'mmu.c', 'heap.c',
                                'runtime.c', 'address_space.c', 'user_loader.c',
+                               'process.c',
                                'devices.c', 'fat32.c', 'vfs.c',
                                'syscall.c', 'scheduler.c', 'exception.c')) {
         $objectName = [System.IO.Path]::ChangeExtension($sourceName, '.o')

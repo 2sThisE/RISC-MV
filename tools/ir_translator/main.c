@@ -15,11 +15,11 @@ static void print_usage(FILE *stream, const char *program)
             "  %s -c INPUT.ll -o OUTPUT.o [--allow-foreign-triple]\n"
             "\n"
             "Options:\n"
-            "  -S                      Emit RISC-VM assembly\n"
+            "  -S                      Emit RArchM64 assembly\n"
             "  -c                      Emit a CVMOBJ2 relocatable object\n"
             "  -o FILE                 Set output path\n"
-            "  --allow-foreign-triple  Bootstrap only; accept non-RISC-VM IR triple\n"
-            "  --print-target          Print the RISC-VM LLVM triple and DataLayout\n"
+            "  --allow-foreign-triple  Bootstrap only; accept non-RArchM64 IR triple\n"
+            "  --print-target          Print the RArchM64 LLVM triple and DataLayout\n"
             "  -h, --help              Show this help\n",
             program, program);
 }
@@ -103,7 +103,7 @@ int main(int argc, char **argv)
             options.allow_foreign_triple = 1;
         } else if (strcmp(argv[i], "--print-target") == 0) {
             printf("target triple = \"%s\"\n",
-                   RISC_VM_LLVM_TARGET_TRIPLE);
+                   RARCH_M64_LLVM_TARGET_TRIPLE);
             printf("target datalayout = \"%s\"\n", CVM_LLVM_DATA_LAYOUT);
             return 0;
         } else if (strcmp(argv[i], "-h") == 0 ||
@@ -139,7 +139,7 @@ int main(int argc, char **argv)
         int okay = write_text(output_path, assembly);
         free(assembly);
         if (okay) {
-            printf("Translated LLVM IR to RISC-VM assembly -> %s\n",
+            printf("Translated LLVM IR to RArchM64 assembly -> %s\n",
                    output_path);
         }
         return okay ? 0 : 1;
@@ -160,7 +160,7 @@ int main(int argc, char **argv)
     if (!okay) {
         fprintf(stderr, "cvmir: %s: %s\n", output_path, object_error);
     } else {
-        printf("Translated LLVM IR to RISC-VM object: %zu sections, %zu symbols, "
+        printf("Translated LLVM IR to RArchM64 object: %zu sections, %zu symbols, "
                "%zu relocations -> %s\n", object.section_count,
                object.symbol_count, object.relocation_count, output_path);
     }

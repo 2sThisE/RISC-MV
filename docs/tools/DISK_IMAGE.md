@@ -1,6 +1,6 @@
-# RISC-VM 부팅 디스크 도구 (`vmkdisk`)
+# RISC-MV 부팅 디스크 도구 (`vmkdisk`)
 
-`vmkdisk`는 검증된 RISC-VM `kernel.exf`를 포함하는 GPT/FAT32 raw 디스크 이미지를
+`vmkdisk`는 검증된 RISC-MV `kernel.exf`를 포함하는 GPT/FAT32 raw 디스크 이미지를
 호스트에서 생성한다. 출력 이미지는 기존 block device 모듈의 backing
 파일로 바로 사용할 수 있다.
 

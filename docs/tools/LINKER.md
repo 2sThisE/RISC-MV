@@ -1,6 +1,6 @@
-# RISC-VM 링커 (`cvmlink`)
+# RISC-MV 링커 (`cvmlink`)
 
-레거시 이름의 `cvmlink`는 재배치 가능한 오브젝트를 RISC-VM EXF 이미지로
+레거시 이름의 `cvmlink`는 재배치 가능한 오브젝트를 RISC-MV EXF 이미지로
 묶는다.
 
 ```powershell
@@ -20,7 +20,7 @@
 
 파일 이름은 일반 도구 체인 관례를 따른다. `.s`는 어셈블리 소스, `.o`는
 재배치 오브젝트이며 `.a`는 정적 라이브러리다. `.exf`는
-RISC-VM 전용 실행/부팅 이미지다. 기존 고정 주소 경로는 `.asm`에서 `.bin`을
+RISC-MV 전용 실행/부팅 이미지다. 기존 고정 주소 경로는 `.asm`에서 `.bin`을
 계속 지원한다.
 
 링커는 `.text` (`r-x`), `.rodata` (`r--`), `.data` (`rw-`), `.bss`

@@ -103,14 +103,14 @@ static int user_validate_image(const uint8_t *data,
                                uintptr_t *image_base,
                                uintptr_t *image_end)
 {
-    static const uint8_t magic[8] = RISC_VM_EXF_MAGIC;
+    static const uint8_t magic[8] = RISC_MV_EXF_MAGIC;
     if (data == NULL || size < CVM_KERNEL_HEADER_SIZE ||
         !user_bytes_equal(data, magic, sizeof(magic)) ||
         user_read_u16(data + 0x08) != CVM_KERNEL_FORMAT_MAJOR ||
         user_read_u16(data + 0x0A) > CVM_KERNEL_FORMAT_MINOR ||
         user_read_u32(data + 0x0C) != CVM_KERNEL_HEADER_SIZE ||
         user_read_u64(data + 0x10) != 0 ||
-        user_read_u32(data + 0x18) != RISC_VM_ISA_ID ||
+        user_read_u32(data + 0x18) != RARCH_M64_ISA_ID ||
         user_read_u32(data + 0x1C) != CVM_ISA_VERSION ||
         data[0x20] != CVM_ADDRESS_BITS ||
         data[0x21] != CVM_BYTE_ORDER_LITTLE ||
@@ -324,12 +324,12 @@ static uint8_t *user_make_test_image(size_t *size)
     *size = CVM_KERNEL_HEADER_SIZE + CVM_KERNEL_SEGMENT_SIZE + 16;
     uint8_t *data = kernel_calloc(1, *size);
     if (data == NULL) return NULL;
-    static const uint8_t magic[8] = RISC_VM_EXF_MAGIC;
+    static const uint8_t magic[8] = RISC_MV_EXF_MAGIC;
     for (size_t i = 0; i < 8; ++i) data[i] = magic[i];
     user_write_u16(data + 0x08, CVM_KERNEL_FORMAT_MAJOR);
     user_write_u16(data + 0x0A, CVM_KERNEL_FORMAT_MINOR);
     user_write_u32(data + 0x0C, CVM_KERNEL_HEADER_SIZE);
-    user_write_u32(data + 0x18, RISC_VM_ISA_ID);
+    user_write_u32(data + 0x18, RARCH_M64_ISA_ID);
     user_write_u32(data + 0x1C, CVM_ISA_VERSION);
     data[0x20] = CVM_ADDRESS_BITS;
     data[0x21] = CVM_BYTE_ORDER_LITTLE;
@@ -433,12 +433,12 @@ uint8_t *kernel_user_test_program_create(const char *message,
     *size = CVM_KERNEL_HEADER_SIZE + CVM_KERNEL_SEGMENT_SIZE + cursor;
     uint8_t *data = kernel_calloc(1, *size);
     if (data == NULL) return NULL;
-    static const uint8_t magic[8] = RISC_VM_EXF_MAGIC;
+    static const uint8_t magic[8] = RISC_MV_EXF_MAGIC;
     for (size_t i = 0; i < 8; ++i) data[i] = magic[i];
     user_write_u16(data + 0x08, CVM_KERNEL_FORMAT_MAJOR);
     user_write_u16(data + 0x0A, CVM_KERNEL_FORMAT_MINOR);
     user_write_u32(data + 0x0C, CVM_KERNEL_HEADER_SIZE);
-    user_write_u32(data + 0x18, RISC_VM_ISA_ID);
+    user_write_u32(data + 0x18, RARCH_M64_ISA_ID);
     user_write_u32(data + 0x1C, CVM_ISA_VERSION);
     data[0x20] = CVM_ADDRESS_BITS;
     data[0x21] = CVM_BYTE_ORDER_LITTLE;

@@ -292,11 +292,11 @@ static int pack_kernel(const PackOptions *options)
 
     CvmKernelHeader header;
     memset(&header, 0, sizeof(header));
-    memcpy(header.magic, RISC_VM_EXF_MAGIC, 8);
+    memcpy(header.magic, RISC_MV_EXF_MAGIC, 8);
     header.format_major = CVM_KERNEL_FORMAT_MAJOR;
     header.format_minor = CVM_KERNEL_FORMAT_MINOR;
     header.header_size = CVM_KERNEL_HEADER_SIZE;
-    header.isa_id = RISC_VM_ISA_ID;
+    header.isa_id = RARCH_M64_ISA_ID;
     header.isa_version = CVM_ISA_VERSION;
     header.address_bits = CVM_ADDRESS_BITS;
     header.byte_order = CVM_BYTE_ORDER_LITTLE;
@@ -389,7 +389,7 @@ static int inspect_kernel(const char *path)
         return 1;
     }
 
-    printf("RISC-VM EXF image v%u.%u\n", header.format_major,
+    printf("RISC-MV EXF image v%u.%u\n", header.format_major,
            header.format_minor);
     printf("  file size:         %" PRIu64 "\n", header.image_file_size);
     if ((header.flags & CVM_KERNEL_FLAG_RELOCATABLE_PHYSICAL) != 0) {
@@ -440,7 +440,7 @@ int main(int argc, char **argv)
     }
     if (argc == 3 && strcmp(argv[1], "inspect") == 0) {
         if (!has_exf_extension(argv[2])) {
-            fputs("vmkimg: RISC-VM executables require the .exf extension\n",
+            fputs("vmkimg: RISC-MV executables require the .exf extension\n",
                   stderr);
             return 2;
         }

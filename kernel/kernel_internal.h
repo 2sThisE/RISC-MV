@@ -137,7 +137,8 @@ extern void kernel_syscall_entry(void);
 extern void kernel_timer_entry(void);
 extern void kernel_start_user(uint64_t page_table_root,
                               uint64_t entry,
-                              uint64_t stack_pointer);
+                              uint64_t stack_pointer,
+                              uint64_t kernel_stack_pointer);
 extern int kernel_probe_null_load(void);
 extern int kernel_probe_rodata_store(void);
 extern int kernel_probe_data_execute(void);
