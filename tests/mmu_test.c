@@ -134,6 +134,82 @@ static void test_partial_physical_page_is_rejected(void)
            MMU_RESULT_MALFORMED_ENTRY);
 }
 
+static void test_large_page_leaves(void)
+{
+    uint8_t memory[TEST_RAM_SIZE] = {0};
+    RAM ram = {
+        .data = memory,
+        .size = sizeof(memory)
+    };
+    assert(ram_enable_synchronization(&ram));
+
+    assert(ram_write(&ram,
+                     ROOT_TABLE,
+                     MMU_TABLE_ENTRY_SIZE,
+                     LEVEL1_TABLE | MMU_PTE_VALID));
+    assert(ram_write(&ram,
+                     LEVEL1_TABLE + 2 * MMU_TABLE_ENTRY_SIZE,
+                     MMU_TABLE_ENTRY_SIZE,
+                     UINT64_C(0x200000) | MMU_PTE_VALID |
+                         MMU_PTE_READ | MMU_PTE_WRITE));
+    assert(ram_write(&ram,
+                     ROOT_TABLE + MMU_TABLE_ENTRY_SIZE,
+                     MMU_TABLE_ENTRY_SIZE,
+                     UINT64_C(0x80000000) | MMU_PTE_VALID |
+                         MMU_PTE_READ | MMU_PTE_EXECUTE | MMU_PTE_USER));
+
+    uint64_t physical_address;
+    assert(mmu_translate(&ram,
+                         ROOT_TABLE,
+                         0,
+                         UINT64_C(0x00412345),
+                         MMU_ACCESS_WRITE,
+                         &physical_address) == MMU_RESULT_OK);
+    assert(physical_address == UINT64_C(0x00212345));
+    assert(mmu_translate(&ram,
+                         ROOT_TABLE,
+                         1,
+                         UINT64_C(0x52345678),
+                         MMU_ACCESS_EXECUTE,
+                         &physical_address) == MMU_RESULT_OK);
+    assert(physical_address == UINT64_C(0x92345678));
+    assert(mmu_translate(&ram,
+                         ROOT_TABLE,
+                         1,
+                         UINT64_C(0x00412345),
+                         MMU_ACCESS_READ,
+                         &physical_address) ==
+           MMU_RESULT_PERMISSION_DENIED);
+}
+
+static void test_misaligned_large_page_is_rejected(void)
+{
+    uint8_t memory[TEST_RAM_SIZE] = {0};
+    RAM ram = {
+        .data = memory,
+        .size = sizeof(memory)
+    };
+    assert(ram_enable_synchronization(&ram));
+    assert(ram_write(&ram,
+                     ROOT_TABLE,
+                     MMU_TABLE_ENTRY_SIZE,
+                     LEVEL1_TABLE | MMU_PTE_VALID));
+    assert(ram_write(&ram,
+                     LEVEL1_TABLE,
+                     MMU_TABLE_ENTRY_SIZE,
+                     UINT64_C(0x201000) | MMU_PTE_VALID |
+                         MMU_PTE_READ));
+
+    uint64_t physical_address;
+    assert(mmu_translate(&ram,
+                         ROOT_TABLE,
+                         0,
+                         0,
+                         MMU_ACCESS_READ,
+                         &physical_address) ==
+           MMU_RESULT_MALFORMED_ENTRY);
+}
+
 static void test_cpu_control_and_cross_page_access(void)
 {
     uint8_t memory[TEST_RAM_SIZE] = {0};
@@ -356,6 +432,8 @@ int test_mmu(void)
 {
     test_walker_permissions();
     test_partial_physical_page_is_rejected();
+    test_large_page_leaves();
+    test_misaligned_large_page_is_rejected();
     test_cpu_control_and_cross_page_access();
     test_cross_page_instruction_fetch();
     test_page_fault_delivery();

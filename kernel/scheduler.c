@@ -16,11 +16,16 @@
 
 static KernelList scheduler_processes;
 static KernelList scheduler_run_queue;
+static KernelList scheduler_reap_queue;
 static KernelThread *scheduler_current;
 static size_t scheduler_process_count;
 static size_t scheduler_thread_count;
 static uint64_t scheduler_timer_count;
 static uint64_t scheduler_preemption_count;
+static size_t scheduler_completed_process_count;
+static size_t scheduler_faulted_process_count;
+static size_t scheduler_reaped_process_count;
+static int scheduler_completion_error;
 static int scheduler_active;
 
 static KernelProcess *scheduler_process_from_node(KernelListNode *node)
@@ -41,6 +46,12 @@ static KernelThread *scheduler_run_thread_from_node(KernelListNode *node)
                             offsetof(KernelThread, run_node));
 }
 
+static KernelProcess *scheduler_reap_process_from_node(KernelListNode *node)
+{
+    return (KernelProcess *)((uint8_t *)node -
+                             offsetof(KernelProcess, reap_node));
+}
+
 static void scheduler_save(KernelThread *thread, const uint64_t *frame)
 {
     for (size_t reg = 0; reg < 15; ++reg) {
@@ -55,12 +66,15 @@ static void scheduler_load(const KernelThread *previous,
                            const KernelThread *thread,
                            uint64_t *frame)
 {
+    uint64_t exception_frame = TRAP_FLAGS(frame) &
+                               KERNEL_SAVED_EXCEPTION_FRAME;
     for (size_t reg = 0; reg < 15; ++reg) {
         TRAP_REGISTER(frame, reg) = thread->registers[reg];
     }
     TRAP_PC(frame) = thread->pc;
     TRAP_FLAGS(frame) = thread->flags | KERNEL_SAVED_USER_MODE |
-                        KERNEL_CPU_FLAG_INTERRUPT_ENABLE;
+                        KERNEL_CPU_FLAG_INTERRUPT_ENABLE |
+                        exception_frame;
     TRAP_USER_SP(frame) = thread->stack_pointer;
     if (previous == NULL ||
         previous->process->image.address_space !=
@@ -112,12 +126,73 @@ static int scheduler_register_process(KernelProcess *process)
 static void scheduler_destroy_processes(void)
 {
     kernel_list_init(&scheduler_run_queue);
+    kernel_list_init(&scheduler_reap_queue);
     KernelListNode *node;
     while ((node = kernel_list_pop_front(&scheduler_processes)) != NULL) {
         kernel_process_destroy(scheduler_process_from_node(node));
     }
     scheduler_process_count = 0;
     scheduler_thread_count = 0;
+}
+
+static void scheduler_record_process_completion(KernelProcess *process)
+{
+    if (process == NULL || process->state != KERNEL_PROCESS_ZOMBIE ||
+        process->live_thread_count != 0) {
+        scheduler_completion_error = 1;
+        return;
+    }
+    if (process->faulted) {
+        ++scheduler_faulted_process_count;
+        if (process->fault_cause != KERNEL_EXCEPTION_LOAD_PAGE_FAULT ||
+            process->fault_address != 0 ||
+            (process->fault_info & KERNEL_EINFO_ORIGIN_USER) == 0 ||
+            process->exit_status !=
+                -(int64_t)KERNEL_EXCEPTION_LOAD_PAGE_FAULT) {
+            scheduler_completion_error = 1;
+        }
+    } else if (process->exit_status != 0) {
+        scheduler_completion_error = 1;
+    }
+    KernelListNode *node = process->threads.sentinel.next;
+    while (node != &process->threads.sentinel) {
+        KernelThread *thread = scheduler_process_thread_from_node(node);
+        node = node->next;
+        int valid_result = process->faulted
+                               ? thread->exit_status == process->exit_status &&
+                                     thread->write_count == 0
+                               : thread->exit_status == 0 &&
+                                     thread->write_count != 0;
+        if (thread->state != KERNEL_THREAD_ZOMBIE || !valid_result ||
+            thread->tid == 0 || thread->kernel_stack_top == 0) {
+            scheduler_completion_error = 1;
+        }
+    }
+    ++scheduler_completed_process_count;
+    if (process->parent == NULL && !process->reap_queued) {
+        kernel_list_push_back(&scheduler_reap_queue, &process->reap_node);
+        process->reap_queued = 1;
+    }
+}
+
+static void scheduler_reap_deferred(void)
+{
+    KernelListNode *node;
+    while ((node = kernel_list_pop_front(&scheduler_reap_queue)) != NULL) {
+        KernelProcess *process = scheduler_reap_process_from_node(node);
+        process->reap_queued = 0;
+        if (scheduler_current != NULL &&
+            scheduler_current->process == process) {
+            kernel_list_push_back(&scheduler_reap_queue,
+                                  &process->reap_node);
+            process->reap_queued = 1;
+            return;
+        }
+        kernel_list_remove(&scheduler_processes,
+                           &process->scheduler_node);
+        kernel_process_destroy(process);
+        ++scheduler_reaped_process_count;
+    }
 }
 
 static void scheduler_reschedule(uint64_t *frame, int timer_switch)
@@ -140,37 +215,43 @@ static void scheduler_finish(void)
     cvm_mmio_write64((uintptr_t)KERNEL_IRQ_ALIAS +
                      IRQ_CONTROLLER_ENABLE_CLEAR_OFFSET,
                      UINT64_C(1) << KERNEL_TIMER_INTERRUPT_LINE);
+    int heap_valid = kernel_heap_validate() == 0;
     int success = scheduler_timer_count != 0 &&
                   scheduler_preemption_count != 0 &&
                   scheduler_process_count == KERNEL_SCHEDULER_TEST_PROCESSES &&
-                  scheduler_thread_count == KERNEL_SCHEDULER_TEST_THREADS;
-    KernelListNode *process_node = scheduler_processes.sentinel.next;
-    while (process_node != &scheduler_processes.sentinel) {
-        KernelProcess *process = scheduler_process_from_node(process_node);
-        process_node = process_node->next;
-        if (process->state != KERNEL_PROCESS_ZOMBIE ||
-            process->exit_status != 0 || process->live_thread_count != 0) {
-            success = 0;
-        }
-        KernelListNode *thread_node = process->threads.sentinel.next;
-        while (thread_node != &process->threads.sentinel) {
-            KernelThread *thread =
-                scheduler_process_thread_from_node(thread_node);
-            thread_node = thread_node->next;
-            if (thread->state != KERNEL_THREAD_ZOMBIE ||
-                thread->exit_status != 0 || thread->write_count == 0 ||
-                thread->tid == 0 || thread->kernel_stack_top == 0) {
-                success = 0;
-            }
-        }
-    }
+                  scheduler_thread_count == KERNEL_SCHEDULER_TEST_THREADS &&
+                  scheduler_completed_process_count ==
+                      KERNEL_SCHEDULER_TEST_PROCESSES &&
+                  scheduler_faulted_process_count == 1 &&
+                  scheduler_reaped_process_count + 1 ==
+                      scheduler_completed_process_count &&
+                  scheduler_processes.count == 1 &&
+                  scheduler_reap_queue.count == 1 &&
+                  scheduler_completion_error == 0 && heap_valid;
     if (success) {
+        kernel_uart_puts("KERNEL: USER FAULT ISOLATED\n");
+        kernel_uart_puts("KERNEL: PROCESS REAP OK\n");
         kernel_uart_puts("KERNEL: PROCESS THREAD OK\n");
         kernel_uart_puts("KERNEL: USER SYSCALL OK\n");
         kernel_uart_puts("KERNEL: PREEMPTIVE SCHEDULER OK\n");
         kernel_uart_puts("KERNEL: READY\n");
     } else {
         kernel_uart_puts("KERNEL ERROR: scheduler runtime self-test\n");
+        kernel_uart_puts("KERNEL DEBUG scheduler completed=");
+        kernel_uart_put_hex64(scheduler_completed_process_count);
+        kernel_uart_puts(" faulted=");
+        kernel_uart_put_hex64(scheduler_faulted_process_count);
+        kernel_uart_puts(" reaped=");
+        kernel_uart_put_hex64(scheduler_reaped_process_count);
+        kernel_uart_puts(" processes=");
+        kernel_uart_put_hex64(scheduler_processes.count);
+        kernel_uart_puts(" reapq=");
+        kernel_uart_put_hex64(scheduler_reap_queue.count);
+        kernel_uart_puts(" error=");
+        kernel_uart_put_hex64((uint64_t)scheduler_completion_error);
+        kernel_uart_puts(" heap=");
+        kernel_uart_put_hex64((uint64_t)heap_valid);
+        kernel_uart_puts("\n");
     }
     cvm_halt();
 }
@@ -200,12 +281,14 @@ void kernel_scheduler_note_write(void)
 void kernel_scheduler_yield(uint64_t *frame)
 {
     if (frame == NULL || kernel_scheduler_current_space() == NULL) return;
+    scheduler_reap_deferred();
     scheduler_reschedule(frame, 0);
 }
 
 void kernel_scheduler_exit(uint64_t *frame, int64_t status)
 {
     if (frame == NULL || kernel_scheduler_current_space() == NULL) return;
+    scheduler_reap_deferred();
     KernelThread *previous = scheduler_current;
     scheduler_save(previous, frame);
     previous->exit_status = status;
@@ -218,7 +301,47 @@ void kernel_scheduler_exit(uint64_t *frame, int64_t status)
     if (process->live_thread_count == 0) {
         if (process->exit_status == -1) process->exit_status = 0;
         process->state = KERNEL_PROCESS_ZOMBIE;
+        scheduler_record_process_completion(process);
     }
+
+    KernelThread *next = scheduler_dequeue();
+    if (next == NULL) scheduler_finish();
+    scheduler_current = next;
+    scheduler_load(previous, next, frame);
+}
+
+void kernel_scheduler_fault(uint64_t *frame,
+                            uint64_t cause,
+                            uint64_t address,
+                            uint64_t info)
+{
+    if (frame == NULL || kernel_scheduler_current_space() == NULL) return;
+    scheduler_reap_deferred();
+    KernelThread *previous = scheduler_current;
+    KernelProcess *process = previous->process;
+    scheduler_save(previous, frame);
+    int64_t status = -(int64_t)cause;
+    KernelListNode *node = process->threads.sentinel.next;
+    while (node != &process->threads.sentinel) {
+        KernelThread *thread = scheduler_process_thread_from_node(node);
+        node = node->next;
+        if (thread->queued) {
+            kernel_list_remove(&scheduler_run_queue, &thread->run_node);
+            thread->queued = 0;
+        }
+        if (thread->state != KERNEL_THREAD_DEAD) {
+            thread->exit_status = status;
+            thread->state = KERNEL_THREAD_ZOMBIE;
+        }
+    }
+    process->live_thread_count = 0;
+    process->exit_status = status;
+    process->fault_cause = cause;
+    process->fault_address = address;
+    process->fault_info = info;
+    process->faulted = 1;
+    process->state = KERNEL_PROCESS_ZOMBIE;
+    scheduler_record_process_completion(process);
 
     KernelThread *next = scheduler_dequeue();
     if (next == NULL) scheduler_finish();
@@ -233,6 +356,7 @@ void kernel_scheduler_timer(uint64_t *frame)
     cvm_mmio_write64((uintptr_t)KERNEL_IRQ_ALIAS + IRQ_CONTROLLER_EOI_OFFSET,
                      KERNEL_TIMER_INTERRUPT_LINE);
     if (frame == NULL || kernel_scheduler_current_space() == NULL) return;
+    scheduler_reap_deferred();
     ++scheduler_timer_count;
     scheduler_reschedule(frame, 1);
 }
@@ -243,6 +367,23 @@ static KernelProcess *scheduler_make_test_process(const char *message,
     size_t image_size;
     uint8_t *data = kernel_user_test_program_create(
         message, 500000, &image_size);
+    if (data == NULL) return NULL;
+    KernelProcess *process = kernel_process_create(data, image_size);
+    kernel_free(data);
+    if (process == NULL) return NULL;
+    for (size_t i = 0; i < thread_count; ++i) {
+        if (kernel_thread_create(process) == NULL) {
+            kernel_process_destroy(process);
+            return NULL;
+        }
+    }
+    return process;
+}
+
+static KernelProcess *scheduler_make_fault_process(size_t thread_count)
+{
+    size_t image_size;
+    uint8_t *data = kernel_user_fault_test_program_create(&image_size);
     if (data == NULL) return NULL;
     KernelProcess *process = kernel_process_create(data, image_size);
     kernel_free(data);
@@ -292,16 +433,20 @@ int kernel_scheduler_self_test(void)
     scheduler_thread_count = 0;
     scheduler_timer_count = 0;
     scheduler_preemption_count = 0;
+    scheduler_completed_process_count = 0;
+    scheduler_faulted_process_count = 0;
+    scheduler_reaped_process_count = 0;
+    scheduler_completion_error = 0;
     kernel_list_init(&scheduler_processes);
     kernel_list_init(&scheduler_run_queue);
+    kernel_list_init(&scheduler_reap_queue);
     kernel_process_system_init();
 
     KernelProcess *first = scheduler_make_test_process(
         "USER[1]: shared process thread\n", 2);
     KernelProcess *second = scheduler_make_test_process(
         "USER[2]: syscall write\n", 1);
-    KernelProcess *third = scheduler_make_test_process(
-        "USER[3]: syscall write\n", 1);
+    KernelProcess *third = scheduler_make_fault_process(1);
     if (!scheduler_validate_test_layout(first, second, third)) {
         kernel_process_destroy(first);
         kernel_process_destroy(second);

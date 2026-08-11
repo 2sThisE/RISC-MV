@@ -11,9 +11,12 @@
    할당과 반환을 자체 검사한다.
 4. 부트로더의 MMU-on handoff를 검증한 뒤 자체 3단계 페이지 테이블을 만든다.
    커널 text는 RX, rodata는 R, data와 stack은 RW, direct-map은 RW/NX다.
+   direct-map은 정렬과 남은 길이가 허용하는 가장 큰 1GiB/2MiB/4KiB leaf를
+   순서대로 선택하며 나머지 커널 매핑은 기본적으로 4KiB leaf를 사용한다.
 5. 새 PTBR로 교체하고 부트로더가 만든 임시 page-table arena를 회수한다.
-6. PMM에서 물리 페이지를 할당해 77-entry VBR 테이블을 설치하고 동기
-   예외 1~11을 kernel panic에 연결한다.
+6. PMM에서 물리 페이지를 할당해 77-entry VBR 테이블을 설치한다. 동기 예외
+   1~11은 공통 trap-frame handler로 들어가며 supervisor의 복구 불가능한
+   예외는 panic, user 예외는 현재 process 종료로 분리한다.
 7. 의도적인 `LOAD_PAGE_FAULT`에서 모든 GPR을 보존하고 누락 페이지를
    매핑한 뒤 `IRET`으로 실패한 LOAD를 재실행한다.
 8. NULL 읽기, rodata 쓰기, data 페이지 실행을 실제로 시도해 각각
@@ -35,7 +38,11 @@
     첫 process의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 16KiB
     kernel stack을 사용한다. timer IRQ 0에서 전체 GPR, PC, FLAGS와 SP를
     저장·교체하며, 주소 공간이 바뀔 때만 PTBR을 교체한다. 모든 syscall 출력,
-    종료와 timer 선점이 관측되어야 `KERNEL: READY`를 출력한다.
+    종료와 timer 선점이 관측되어야 한다. 한 process는 의도적으로 NULL user
+    load page fault를 일으키며, 해당 process만 종료되고 나머지가 계속 실행해야
+    한다. 부모 없는 zombie는 reap queue에 들어간 뒤 다음 thread의 trap에서
+    address space, user page와 user/kernel stack을 해제한다. 이 검사가 모두
+    성공해야 `KERNEL: READY`를 출력한다.
 
 빌드는 프로젝트 루트에서 실행한다.
 
@@ -48,7 +55,7 @@ legacy 이름의 `cvmlink`로 `kernel.exf`와 `kernel.map`을 생성한다.
 
 - `kernel_main.c`: BootInfo 검증, UART와 전체 부팅 순서
 - `pmm.c`: 물리 페이지 free-list
-- `mmu.c`: 3단계 페이지 테이블과 MMU 전환
+- `mmu.c`: 4KiB/2MiB/1GiB leaf를 지원하는 3단계 페이지 테이블과 MMU 전환
 - `heap.c`: 동적 가상주소 기반 kernel heap
 - `runtime.c`: list, byte queue, bitmap과 spinlock
 - `address_space.c`: 프로세스별 page table과 user page 관리
@@ -113,9 +120,10 @@ syscall은 동일한 trap-frame wrapper를 사용하고 scheduler가 선택된 t
 frame과 kernel SP를 적용한 뒤, process가 달라질 때만 PTBR을 바꾼다.
 
 현재 상태 전이는 생성 시 `NEW`, runnable queue 등록 시 `RUNNABLE`, dequeue 시
-`RUNNING`, syscall exit 시 `ZOMBIE`다. `BLOCKED` wakeup과 종료 객체를 `DEAD`로
-수거하는 수명 관리는 다음 단계이며, 마지막 thread가 종료되면 process는
-`ZOMBIE`가 된다.
+`RUNNING`, syscall exit 또는 user fault 시 `ZOMBIE`, deferred reap 시 `DEAD`다.
+마지막 thread가 종료되면 process도 `ZOMBIE`가 된다. 부모가 없는 process는
+현재 kernel stack에서 빠져나온 다음 trap에서 자동 수거한다. parent/child와
+`wait`/`waitpid`, `join`, `init` 재부모화 및 `BLOCKED` wakeup은 아직 없다.
 
 현재 VFS는 boot partition 하나를 `/`로 취급하며 FAT32 short 8.3 이름을
 지원한다. 파일 읽기와 같은 디렉터리 안의 파일 생성·교체는 가능하지만 LFN,

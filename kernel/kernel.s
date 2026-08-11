@@ -7,6 +7,7 @@
 .section .text
 .global kernel_entry
 .global kernel_exception_panic_entry
+.global kernel_exception_entry
 .global kernel_page_fault_entry
 .global kernel_syscall_entry
 .global kernel_timer_entry
@@ -21,13 +22,13 @@
 .global kernel_execute_probe_instruction
 .global kernel_execute_probe_resume
 .extern kernel_main
-.extern kernel_handle_page_fault
+.extern kernel_exception_dispatch
 .extern kernel_exception_panic
 .extern kernel_syscall_dispatch
 .extern kernel_scheduler_timer
 .extern kernel_stack_top
 .type kernel_main, function
-.type kernel_handle_page_fault, function
+.type kernel_exception_dispatch, function
 .type kernel_exception_panic, function
 .entry kernel_entry
 
@@ -44,10 +45,10 @@ kernel_exception_panic_entry:
     CALLREL kernel_exception_panic
     HALT
 
-; All three MMU page-fault vectors use this wrapper. Preserve every GPR because
-; IRET may retry the original instruction. Fifteen pushes require one padding
-; qword to restore the ABI's 16-byte call alignment. The supervisor exception
-; frame return PC is therefore at wrapper SP+128.
+; Every synchronous exception uses this wrapper. Preserve every GPR because a
+; supervisor fault may retry the instruction and a user fault may switch to a
+; different thread. Fifteen pushes require one padding qword for ABI alignment.
+kernel_exception_entry:
 kernel_page_fault_entry:
     PUSH R0
     PUSH R1
@@ -67,8 +68,7 @@ kernel_page_fault_entry:
     ADDI32 SP, -8
 
     MOV R0, SP
-    ADDI32 R0, 128
-    CALLREL kernel_handle_page_fault
+    CALLREL kernel_exception_dispatch
     CMPI32 R0, 0
     BRCC NE, kernel_page_fault_fatal
 

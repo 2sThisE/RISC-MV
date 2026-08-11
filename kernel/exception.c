@@ -12,6 +12,9 @@ static volatile uint64_t execute_test_active;
 static volatile uint64_t execute_fault_count;
 static uintptr_t kernel_vbr;
 
+#define EXCEPTION_TRAP_PC(frame) ((frame)[16])
+#define EXCEPTION_TRAP_FLAGS(frame) ((frame)[17])
+
 static int has_all(uint64_t value, uint64_t required)
 {
     return (value & required) == required;
@@ -29,17 +32,8 @@ int kernel_exception_init(void)
     }
     for (size_t i = 1; i <= 11; ++i) {
         vectors[KERNEL_VECTOR_EXCEPTION_BASE + i] =
-            (uint64_t)(uintptr_t)kernel_exception_panic_entry;
+            (uint64_t)(uintptr_t)kernel_exception_entry;
     }
-    vectors[KERNEL_VECTOR_EXCEPTION_BASE +
-            KERNEL_EXCEPTION_INSTRUCTION_PAGE_FAULT] =
-        (uint64_t)(uintptr_t)kernel_page_fault_entry;
-    vectors[KERNEL_VECTOR_EXCEPTION_BASE +
-            KERNEL_EXCEPTION_LOAD_PAGE_FAULT] =
-        (uint64_t)(uintptr_t)kernel_page_fault_entry;
-    vectors[KERNEL_VECTOR_EXCEPTION_BASE +
-            KERNEL_EXCEPTION_STORE_PAGE_FAULT] =
-        (uint64_t)(uintptr_t)kernel_page_fault_entry;
     vectors[KERNEL_VECTOR_SYSCALL] =
         (uint64_t)(uintptr_t)kernel_syscall_entry;
     vectors[KERNEL_TIMER_INTERRUPT_LINE] =
@@ -174,6 +168,27 @@ int kernel_handle_page_fault(uint64_t *return_pc)
     }
     if (cause == KERNEL_EXCEPTION_INSTRUCTION_PAGE_FAULT) {
         return handle_instruction_page_fault(address, info, return_pc);
+    }
+    return 1;
+}
+
+int kernel_exception_dispatch(uint64_t *frame)
+{
+    if (frame == NULL) return 1;
+    uint64_t cause = cvm_exception_cause();
+    uint64_t address = cvm_exception_address();
+    uint64_t info = cvm_exception_info();
+    int from_user = (info & KERNEL_EINFO_ORIGIN_USER) != 0 &&
+                    (EXCEPTION_TRAP_FLAGS(frame) &
+                     KERNEL_SAVED_USER_MODE) != 0;
+    if (from_user && kernel_scheduler_current_space() != NULL) {
+        kernel_scheduler_fault(frame, cause, address, info);
+        return 0;
+    }
+    if (cause == KERNEL_EXCEPTION_INSTRUCTION_PAGE_FAULT ||
+        cause == KERNEL_EXCEPTION_LOAD_PAGE_FAULT ||
+        cause == KERNEL_EXCEPTION_STORE_PAGE_FAULT) {
+        return kernel_handle_page_fault(&EXCEPTION_TRAP_PC(frame));
     }
     return 1;
 }

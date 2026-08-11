@@ -58,7 +58,11 @@ MmuResult mmu_translate(RAM *ram,
         return MMU_RESULT_INVALID_ROOT;
     }
 
-    const unsigned int shifts[3] = {30U, 21U, 12U};
+    const unsigned int shifts[3] = {
+        MMU_GIGA_PAGE_SHIFT,
+        MMU_LARGE_PAGE_SHIFT,
+        MMU_PAGE_SHIFT
+    };
     uint64_t table_address = root_address;
 
     for (size_t level = 0; level < 3; ++level) {
@@ -82,8 +86,8 @@ MmuResult mmu_translate(RAM *ram,
         uint64_t permissions = pte & MMU_PTE_PERMISSION_MASK;
         uint64_t next_address = pte & MMU_PTE_ADDRESS_MASK;
 
-        if (level < 2) {
-            if (permissions != 0 || (pte & MMU_PTE_USER) != 0 ||
+        if (permissions == 0) {
+            if (level == 2 || (pte & MMU_PTE_USER) != 0 ||
                 !mmu_root_valid(ram, next_address)) {
                 return MMU_RESULT_MALFORMED_ENTRY;
             }
@@ -91,7 +95,9 @@ MmuResult mmu_translate(RAM *ram,
             continue;
         }
 
-        if (permissions == 0) {
+        uint64_t leaf_size = UINT64_C(1) << shifts[level];
+        uint64_t leaf_mask = leaf_size - UINT64_C(1);
+        if ((next_address & leaf_mask) != 0) {
             return MMU_RESULT_MALFORMED_ENTRY;
         }
         if (!permission_granted(pte, user_mode, access)) {
@@ -100,12 +106,12 @@ MmuResult mmu_translate(RAM *ram,
         if (next_address < (uint64_t)ram->size &&
             !physical_range_valid(ram,
                                   next_address,
-                                  (size_t)MMU_PAGE_SIZE)) {
+                                  (size_t)leaf_size)) {
             return MMU_RESULT_MALFORMED_ENTRY;
         }
 
         *physical_address = next_address |
-                            (virtual_address & MMU_PAGE_MASK);
+                            (virtual_address & leaf_mask);
         return MMU_RESULT_OK;
     }
 

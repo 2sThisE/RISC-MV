@@ -10,6 +10,12 @@
 #define KERNEL_PAGE_SHIFT 12U
 #define KERNEL_PAGE_SIZE UINT64_C(4096)
 #define KERNEL_PAGE_MASK (KERNEL_PAGE_SIZE - UINT64_C(1))
+#define KERNEL_LARGE_PAGE_SHIFT 21U
+#define KERNEL_LARGE_PAGE_SIZE (UINT64_C(1) << KERNEL_LARGE_PAGE_SHIFT)
+#define KERNEL_LARGE_PAGE_MASK (KERNEL_LARGE_PAGE_SIZE - UINT64_C(1))
+#define KERNEL_GIGA_PAGE_SHIFT 30U
+#define KERNEL_GIGA_PAGE_SIZE (UINT64_C(1) << KERNEL_GIGA_PAGE_SHIFT)
+#define KERNEL_GIGA_PAGE_MASK (KERNEL_GIGA_PAGE_SIZE - UINT64_C(1))
 #define KERNEL_PTE_ADDRESS_MASK (~KERNEL_PAGE_MASK)
 
 #define KERNEL_PTE_VALID   (UINT64_C(1) << 0)
@@ -17,6 +23,8 @@
 #define KERNEL_PTE_WRITE   (UINT64_C(1) << 2)
 #define KERNEL_PTE_EXECUTE (UINT64_C(1) << 3)
 #define KERNEL_PTE_USER    (UINT64_C(1) << 4)
+#define KERNEL_PTE_PERMISSION_MASK \
+    (KERNEL_PTE_READ | KERNEL_PTE_WRITE | KERNEL_PTE_EXECUTE)
 
 #define KERNEL_VECTOR_ENTRY_COUNT 77U
 #define KERNEL_VECTOR_EXCEPTION_BASE 64U
@@ -24,6 +32,7 @@
 #define KERNEL_TIMER_INTERRUPT_LINE 0U
 
 #define KERNEL_SAVED_USER_MODE (UINT64_C(1) << 62)
+#define KERNEL_SAVED_EXCEPTION_FRAME (UINT64_C(1) << 63)
 #define KERNEL_CPU_FLAG_INTERRUPT_ENABLE (UINT64_C(1) << 4)
 
 #define KERNEL_EXCEPTION_INSTRUCTION_PAGE_FAULT UINT64_C(8)
@@ -34,6 +43,7 @@
 #define KERNEL_EINFO_ACCESS_READ    (UINT64_C(1) << 1)
 #define KERNEL_EINFO_ACCESS_WRITE   (UINT64_C(1) << 2)
 #define KERNEL_EINFO_ACCESS_EXECUTE (UINT64_C(1) << 3)
+#define KERNEL_EINFO_ORIGIN_USER    (UINT64_C(1) << 5)
 #define KERNEL_EINFO_MMU_ENABLED    (UINT64_C(1) << 6)
 #define KERNEL_EINFO_NOT_PRESENT    (UINT64_C(1) << 10)
 #define KERNEL_EINFO_PERMISSION     (UINT64_C(1) << 12)
@@ -113,6 +123,10 @@ KernelAddressSpace *kernel_scheduler_current_space(void);
 uint64_t kernel_scheduler_current_pid(void);
 void kernel_scheduler_yield(uint64_t *frame);
 void kernel_scheduler_exit(uint64_t *frame, int64_t status);
+void kernel_scheduler_fault(uint64_t *frame,
+                            uint64_t cause,
+                            uint64_t address,
+                            uint64_t info);
 void kernel_scheduler_note_write(void);
 void kernel_scheduler_timer(uint64_t *frame);
 int kernel_scheduler_self_test(void);
@@ -129,9 +143,11 @@ int kernel_exception_init(void);
 int kernel_memory_protection_self_test(void);
 int kernel_demand_page_self_test(void);
 int kernel_handle_page_fault(uint64_t *return_pc);
+int kernel_exception_dispatch(uint64_t *frame);
 void kernel_exception_panic(void);
 
 extern void kernel_exception_panic_entry(void);
+extern void kernel_exception_entry(void);
 extern void kernel_page_fault_entry(void);
 extern void kernel_syscall_entry(void);
 extern void kernel_timer_entry(void);

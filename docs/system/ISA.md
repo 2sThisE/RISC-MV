@@ -368,7 +368,7 @@ supervisor에서 발생한 예외는 FLAGS, 이전 권한 모드와 `EPC`를 현
 
 MMU가 꺼져 있으면 PC, R15와 주소 레지스터의 값이 물리 주소로 바로 사용된다. MMU가 켜져 있으면 명령 fetch, 분기 목적지, 일반 LOAD·STORE, 스택과 atomic 주소가 모두 가상 주소가 된다. 페이지 테이블 walker와 VBR 테이블 조회만 물리 RAM을 직접 사용한다.
 
-페이지 크기는 4KiB이며 현재 가상 주소는 unsigned 39비트 범위 `0x0`~`0x7FFFFFFFFF`다. 3단계 테이블은 단계마다 512개의 64비트 PTE를 가진다.
+기본 페이지 크기는 4KiB이며 현재 가상 주소는 unsigned 39비트 범위 `0x0`~`0x7FFFFFFFFF`다. 3단계 테이블은 단계마다 512개의 64비트 PTE를 가진다. L0 leaf는 4KiB, L1 leaf는 2MiB, L2 leaf는 1GiB를 매핑한다.
 
 ```text
 가상 주소
@@ -377,7 +377,7 @@ MMU가 꺼져 있으면 PC, R15와 주소 레지스터의 값이 물리 주소�
 └─────────┴─────────┴─────────┴────────────┘
 ```
 
-PTBR은 4KiB 정렬된 L2 테이블의 물리 주소다. L2와 L1의 유효 엔트리는 다음 단계 테이블의 4KiB 정렬된 물리 주소와 `VALID`만 가져야 한다. 현재 구현은 huge page leaf를 지원하지 않으며 leaf는 L0에만 올 수 있다.
+PTBR은 4KiB 정렬된 L2 테이블의 물리 주소다. L2와 L1 엔트리에 R/W/X 권한이 하나도 없으면 다음 단계 테이블을 가리키며, 이때 물리 주소와 `VALID`만 가져야 한다. R/W/X 중 하나 이상이 있으면 해당 단계의 leaf다. L2 leaf의 물리 주소는 1GiB, L1 leaf는 2MiB, L0 leaf는 4KiB 정렬이어야 하며 정렬에 포함되는 주소 하위 비트가 0이 아니면 malformed page fault가 발생한다.
 
 | PTE 비트 | 이름 | 의미 |
 |---:|---|---|
@@ -389,9 +389,9 @@ PTBR은 4KiB 정렬된 L2 테이블의 물리 주소다. L2와 L1의 유효 엔�
 | `5`~`11` | 예약 | 0이어야 함 |
 | `12`~`63` | 물리 페이지 주소 | 하위 12비트가 0인 주소 |
 
-L0 leaf는 `READ`, `WRITE`, `EXECUTE` 중 하나 이상을 가져야 하며 `WRITE`는 `READ`와 함께 설정해야 한다. supervisor도 R/W/X 권한 검사는 받지만 `USER` 비트는 필요하지 않다. user 모드는 요청 권한과 함께 `USER`도 설정돼 있어야 한다. atomic 명령은 `READ|WRITE`를 모두 요구한다.
+모든 단계의 leaf는 `READ`, `WRITE`, `EXECUTE` 중 하나 이상을 가져야 하며 `WRITE`는 `READ`와 함께 설정해야 한다. supervisor도 R/W/X 권한 검사는 받지만 `USER` 비트는 필요하지 않다. user 모드는 요청 권한과 함께 `USER`도 설정돼 있어야 한다. atomic 명령은 `READ|WRITE`를 모두 요구한다.
 
-일반 RAM을 가리키는 leaf는 물리 4KiB 전체가 실제 RAM 안에 있어야 한다. RAM 크기가 4KiB 배수가 아니면 마지막 자투리 영역은 MMU가 켜진 상태에서 페이지로 매핑할 수 없다. RAM 범위 밖의 물리 페이지 주소는 Bus의 MMIO 페이지를 가리킬 수 있으므로 walker가 허용하며 실제 접근 가능 여부는 Bus가 최종 검사한다.
+일반 RAM을 가리키는 leaf는 해당 leaf 크기 전체가 실제 RAM 안에 있어야 한다. RAM 크기가 4KiB 배수가 아니면 마지막 자투리 영역은 MMU가 켜진 상태에서 페이지로 매핑할 수 없다. RAM 범위 밖의 정렬된 물리 주소는 Bus의 MMIO를 가리킬 수 있으므로 walker가 허용하며 실제 접근 가능 여부는 Bus가 최종 검사한다.
 
 `SETPTBR`은 루트 테이블이 정렬되고 4KiB 전체가 물리 RAM 안에 있는지 검사한다. MMU가 이미 켜져 있을 때 PTBR을 바꾸려면 새 테이블로 다음 PC를 실행할 수 있어야 한다. `MMUON`도 설정된 PTBR과 다음 PC의 supervisor 실행 매핑을 확인한 뒤 상태를 바꾼다. `MMUOFF`는 다음 PC가 같은 숫자의 물리 RAM 주소로 존재할 때만 상태를 끈다. 전환 명령 자체는 이전 MMU 상태에서 끝까지 실행되고 다음 opcode fetch부터 새 상태가 적용된다.
 

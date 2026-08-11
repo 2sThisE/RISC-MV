@@ -130,7 +130,9 @@ BOOT_INFO, INITRD, FIRMWARE, MMIO를 정의한다. 커널은 USABLE만 즉시
 
 reference loader는 펌웨어 USABLE map에서 커널 물리 base를 first-fit으로
 선택하고 임시 페이지 테이블에 loader identity map, kernel 고정 VA, RAM
-direct-map과 UART alias를 구성한다. 커널은 이 PTBR을 인수해 자체 테이블로
+direct-map과 UART alias를 구성한다. RAM direct-map은 가능한 경우 1GiB와
+2MiB 상위 단계 leaf를 사용하고 정렬되지 않은 나머지는 4KiB leaf로 매핑한다.
+커널은 이 PTBR을 인수해 자체 테이블로
 교체한 뒤 임시 page-table 페이지를 PMM에 반환한다.
 
 전체 장치 목록은 BootInfo에 복제하지 않는다. 커널은 `vio_hub_base`와

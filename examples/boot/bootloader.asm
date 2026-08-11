@@ -609,6 +609,48 @@ map_page_range:
     CMPI32 R6, 0
     BRCC EQ, map_page_range_done
 map_page_range_loop:
+    CMPI32 R6, 1073741824
+    BRCC LTU, map_page_range_try_large
+    MOV R0, R4
+    OR R0, R5
+    MOVI64 R1, 0x3FFFFFFF
+    AND R0, R1
+    CMPI32 R0, 0
+    BRCC NE, map_page_range_try_large
+    MOV R0, R4
+    MOV R1, R5
+    MOV R2, R7
+    CALLREL map_giga_page
+    CMPI32 R0, 0
+    BRCC NE, map_page_range_fail
+    CMPI32 R6, 1073741824
+    BRCC EQ, map_page_range_done
+    ADDI32 R4, 1073741824
+    ADDI32 R5, 1073741824
+    ADDI32 R6, -1073741824
+    JUMPREL map_page_range_loop
+map_page_range_try_large:
+    CMPI32 R6, 2097152
+    BRCC LTU, map_page_range_small
+    MOV R0, R4
+    OR R0, R5
+    MOVI32U R1, 0x1FFFFF
+    AND R0, R1
+    CMPI32 R0, 0
+    BRCC NE, map_page_range_small
+    MOV R0, R4
+    MOV R1, R5
+    MOV R2, R7
+    CALLREL map_large_page
+    CMPI32 R0, 0
+    BRCC NE, map_page_range_fail
+    CMPI32 R6, 2097152
+    BRCC EQ, map_page_range_done
+    ADDI32 R4, 2097152
+    ADDI32 R5, 2097152
+    ADDI32 R6, -2097152
+    JUMPREL map_page_range_loop
+map_page_range_small:
     MOV R0, R4
     MOV R1, R5
     MOV R2, R7
@@ -631,6 +673,94 @@ map_page_range_restore:
     POP R6
     POP R5
     POP R4
+    RET
+
+; R0=1GiB-aligned VA, R1=PA, R2=PTE permission bits.
+map_giga_page:
+    PUSH R3
+    PUSH R4
+    PUSH R5
+    MOV R3, R0
+    MOV R4, R1
+    MOV R5, R2
+    MOVI32U R0, 0x9000
+    LOAD64O R0, R0, 0x68
+    SHR R3, 30
+    ANDI32 R3, 0x1FF
+    SHL R3, 3
+    ADD R3, R0
+    LOAD64 R0, R3
+    TESTI32 R0, 1
+    BRCC NE, map_giga_page_fail
+    MOVI64 R0, 0xFFFFFFFFC0000000
+    AND R4, R0
+    OR R4, R5
+    ORI32 R4, 1
+    STORE64 R3, R4
+    MOVI32U R0, 0
+    JUMPREL map_giga_page_restore
+map_giga_page_fail:
+    MOVI32U R0, 1
+map_giga_page_restore:
+    POP R5
+    POP R4
+    POP R3
+    RET
+
+; R0=2MiB-aligned VA, R1=PA, R2=PTE permission bits.
+map_large_page:
+    PUSH R3
+    PUSH R4
+    PUSH R5
+    PUSH R6
+    PUSH R7
+    MOV R3, R0
+    MOV R4, R1
+    MOV R5, R2
+    MOVI32U R6, 0x9000
+    LOAD64O R6, R6, 0x68
+    MOV R7, R3
+    SHR R7, 30
+    ANDI32 R7, 0x1FF
+    SHL R7, 3
+    ADD R7, R6
+    LOAD64 R6, R7
+    TESTI32 R6, 1
+    BRCC NE, map_large_page_have_level1
+    CALLREL allocate_table_page
+    CMPI32 R0, 0
+    BRCC EQ, map_large_page_fail
+    MOV R6, R0
+    ORI32 R6, 1
+    STORE64 R7, R6
+map_large_page_have_level1:
+    TESTI32 R6, 30
+    BRCC NE, map_large_page_fail
+    MOVI64 R0, 0xFFFFFFFFFFFFF000
+    AND R6, R0
+    MOV R7, R3
+    SHR R7, 21
+    ANDI32 R7, 0x1FF
+    SHL R7, 3
+    ADD R7, R6
+    LOAD64 R0, R7
+    TESTI32 R0, 1
+    BRCC NE, map_large_page_fail
+    MOVI64 R0, 0xFFFFFFFFFFE00000
+    AND R4, R0
+    OR R4, R5
+    ORI32 R4, 1
+    STORE64 R7, R4
+    MOVI32U R0, 0
+    JUMPREL map_large_page_restore
+map_large_page_fail:
+    MOVI32U R0, 1
+map_large_page_restore:
+    POP R7
+    POP R6
+    POP R5
+    POP R4
+    POP R3
     RET
 
 ; R0=VA, R1=PA, R2=PTE permission bits. Returns zero on success.
@@ -663,6 +793,8 @@ map_page:
     ORI32 R8, 1
     STORE64 R7, R8
 map_page_have_level1:
+    TESTI32 R8, 30
+    BRCC NE, map_page_fail
     MOVI64 R9, 0xFFFFFFFFFFFFF000
     AND R8, R9
     MOV R7, R3
@@ -680,6 +812,8 @@ map_page_have_level1:
     ORI32 R8, 1
     STORE64 R7, R8
 map_page_have_level0:
+    TESTI32 R8, 30
+    BRCC NE, map_page_fail
     MOVI64 R9, 0xFFFFFFFFFFFFF000
     AND R8, R9
     MOV R7, R3

@@ -71,6 +71,7 @@ typedef struct KernelThread KernelThread;
 
 struct KernelProcess {
     KernelListNode scheduler_node;
+    KernelListNode reap_node;
     KernelList threads;
     KernelProcess *parent;
     void *fd_table;
@@ -80,7 +81,12 @@ struct KernelProcess {
     size_t thread_count;
     size_t live_thread_count;
     int64_t exit_status;
+    uint64_t fault_cause;
+    uint64_t fault_address;
+    uint64_t fault_info;
     KernelProcessState state;
+    int faulted;
+    int reap_queued;
 };
 
 struct KernelThread {
@@ -145,6 +151,7 @@ int kernel_user_loader_self_test(void);
 uint8_t *kernel_user_test_program_create(const char *message,
                                          uint32_t loop_count,
                                          size_t *size);
+uint8_t *kernel_user_fault_test_program_create(size_t *size);
 
 void kernel_process_system_init(void);
 KernelProcess *kernel_process_create(const uint8_t *data, size_t size);

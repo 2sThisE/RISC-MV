@@ -18,7 +18,8 @@
 - [x] RISC-MV ISA 계열과 64-bit little-endian `RArchM64` 아키텍처
 - [x] `RArchM64`의 256개 opcode 공간
 - [x] 정수, 부호 연산, 분기, call/return, atomic/fence, float와 SIMD 기초
-- [x] privilege mode, MMU, page table, 예외, VBR, syscall과 interrupt return
+- [x] privilege mode, 4KiB/2MiB/1GiB MMU leaf, page table, 예외, VBR,
+  syscall과 interrupt return
 - [x] timer, IRQ controller, IPI, core-control과 가상 multicore/hardware-thread
 - [x] RAM/ROM/MMIO bus, VIO hub와 동적 장치 module ABI
 - [x] UART, block, keyboard와 XRGB8888 framebuffer display 장치
@@ -86,15 +87,17 @@ Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 
 ### P1.3-B — 수명 관리와 user fault 격리
 
-- [ ] process/thread reference와 소유 자원 해제 순서 정의
+- [ ] parent/child reference와 wait 가능한 zombie의 소유권 규칙 정의
+  (부모 없는 process의 deferred reap 순서는 완료)
 - [x] thread 종료와 마지막 thread 종료를 process zombie 전환으로 연결
 - [ ] parent/child 관계, exit status, zombie와 `wait`/`waitpid` 구현
 - [ ] thread `join`과 이미 종료된 대상의 즉시 수거 규칙 구현
 - [ ] orphan 처리와 중복 wait/join 방지
-- [ ] user page fault, illegal instruction과 privilege fault를 현재 process 종료로 전달
-- [ ] kernel mode fault와 손상된 kernel 상태는 기존 panic 유지
+- [x] user page fault, illegal instruction과 privilege fault를 현재 process 종료로 전달
+- [x] kernel mode fault와 손상된 kernel 상태는 기존 panic 유지
 - [ ] address space, page, EXF image, stack과 FD가 정확히 한 번 회수되는지 검사
-- [ ] 한 user process가 fault로 종료돼도 다른 process가 계속 실행되는 회귀 테스트
+  (부모 없는 process의 address space/page/user·kernel stack 수거와 heap 검증 완료)
+- [x] 한 user process가 fault로 종료돼도 다른 process가 계속 실행되는 회귀 테스트
 
 완료 조건: 잘못된 user EXF가 kernel이나 다른 process를 종료시키지 않고 모든
 자원이 수거되어야 한다.

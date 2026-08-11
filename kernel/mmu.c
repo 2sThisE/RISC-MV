@@ -9,39 +9,77 @@ uintptr_t kernel_page_table_root(void)
     return kernel_ptbr;
 }
 
-int kernel_map_page(uintptr_t root, uintptr_t virtual_address,
-                    uintptr_t physical_address, uint64_t flags)
+static int table_entry_valid(uint64_t entry)
 {
+    return (entry & KERNEL_PTE_VALID) != 0 &&
+           (entry & (KERNEL_PTE_PERMISSION_MASK | KERNEL_PTE_USER)) == 0;
+}
+
+static int allocate_next_table(uint64_t *entry)
+{
+    if ((*entry & KERNEL_PTE_VALID) != 0) {
+        return table_entry_valid(*entry) ? 0 : 1;
+    }
+    uintptr_t page = kernel_pmm_alloc_page();
+    if (page == 0) return 1;
+    *entry = (uint64_t)page | KERNEL_PTE_VALID;
+    return 0;
+}
+
+static int kernel_map_leaf(uintptr_t root,
+                           uintptr_t virtual_address,
+                           uintptr_t physical_address,
+                           uint64_t flags,
+                           unsigned int leaf_shift)
+{
+    uint64_t leaf_size = UINT64_C(1) << leaf_shift;
+    uint64_t leaf_mask = leaf_size - UINT64_C(1);
+    if (((uint64_t)virtual_address & leaf_mask) != 0 ||
+        ((uint64_t)physical_address & leaf_mask) != 0 ||
+        (flags & KERNEL_PTE_VALID) == 0 ||
+        (flags & KERNEL_PTE_PERMISSION_MASK) == 0 ||
+        (flags & ~(KERNEL_PTE_VALID | KERNEL_PTE_PERMISSION_MASK |
+                   KERNEL_PTE_USER)) != 0 ||
+        ((flags & KERNEL_PTE_WRITE) != 0 &&
+         (flags & KERNEL_PTE_READ) == 0)) {
+        return 1;
+    }
+
     uint64_t *level2 = kernel_phys_to_virt(root);
     if (level2 == NULL) return 1;
     size_t index2 = (size_t)((virtual_address >> 30) & UINT64_C(0x1FF));
-    uint64_t entry2 = level2[index2];
-    if ((entry2 & KERNEL_PTE_VALID) == 0) {
-        uintptr_t page = kernel_pmm_alloc_page();
-        if (page == 0) return 1;
-        entry2 = (uint64_t)page | KERNEL_PTE_VALID;
-        level2[index2] = entry2;
+    if (leaf_shift == KERNEL_GIGA_PAGE_SHIFT) {
+        if ((level2[index2] & KERNEL_PTE_VALID) != 0) return 1;
+        level2[index2] = (uint64_t)physical_address | flags;
+        return 0;
     }
+    if (allocate_next_table(&level2[index2]) != 0) return 1;
 
     uint64_t *level1 = kernel_phys_to_virt(
-        (uintptr_t)(entry2 & KERNEL_PTE_ADDRESS_MASK));
+        (uintptr_t)(level2[index2] & KERNEL_PTE_ADDRESS_MASK));
     if (level1 == NULL) return 1;
     size_t index1 = (size_t)((virtual_address >> 21) & UINT64_C(0x1FF));
-    uint64_t entry1 = level1[index1];
-    if ((entry1 & KERNEL_PTE_VALID) == 0) {
-        uintptr_t page = kernel_pmm_alloc_page();
-        if (page == 0) return 1;
-        entry1 = (uint64_t)page | KERNEL_PTE_VALID;
-        level1[index1] = entry1;
+    if (leaf_shift == KERNEL_LARGE_PAGE_SHIFT) {
+        if ((level1[index1] & KERNEL_PTE_VALID) != 0) return 1;
+        level1[index1] = (uint64_t)physical_address | flags;
+        return 0;
     }
+    if (allocate_next_table(&level1[index1]) != 0) return 1;
 
     uint64_t *level0 = kernel_phys_to_virt(
-        (uintptr_t)(entry1 & KERNEL_PTE_ADDRESS_MASK));
+        (uintptr_t)(level1[index1] & KERNEL_PTE_ADDRESS_MASK));
     if (level0 == NULL) return 1;
     size_t index0 = (size_t)((virtual_address >> 12) & UINT64_C(0x1FF));
     level0[index0] = ((uint64_t)physical_address & KERNEL_PTE_ADDRESS_MASK) |
                      flags;
     return 0;
+}
+
+int kernel_map_page(uintptr_t root, uintptr_t virtual_address,
+                    uintptr_t physical_address, uint64_t flags)
+{
+    return kernel_map_leaf(root, virtual_address, physical_address, flags,
+                           KERNEL_PAGE_SHIFT);
 }
 
 static int map_range(uintptr_t root,
@@ -67,14 +105,30 @@ static int map_range(uintptr_t root,
     }
     uintptr_t mapped_size = (size + leading + (uintptr_t)KERNEL_PAGE_MASK) &
                             (uintptr_t)KERNEL_PTE_ADDRESS_MASK;
-    for (uintptr_t offset = 0; offset < mapped_size;
-         offset += (uintptr_t)KERNEL_PAGE_SIZE) {
-        if (kernel_map_page(root,
-                            virtual_page + offset,
-                            physical_page + offset,
-                            flags) != 0) {
+    uintptr_t offset = 0;
+    while (offset < mapped_size) {
+        uintptr_t virtual_address = virtual_page + offset;
+        uintptr_t physical_address = physical_page + offset;
+        uintptr_t remaining = mapped_size - offset;
+        unsigned int leaf_shift = KERNEL_PAGE_SHIFT;
+        uintptr_t leaf_size = (uintptr_t)KERNEL_PAGE_SIZE;
+        if ((((uint64_t)virtual_address | (uint64_t)physical_address) &
+             KERNEL_GIGA_PAGE_MASK) == 0 &&
+            remaining >= (uintptr_t)KERNEL_GIGA_PAGE_SIZE) {
+            leaf_shift = KERNEL_GIGA_PAGE_SHIFT;
+            leaf_size = (uintptr_t)KERNEL_GIGA_PAGE_SIZE;
+        } else if ((((uint64_t)virtual_address |
+                     (uint64_t)physical_address) &
+                    KERNEL_LARGE_PAGE_MASK) == 0 &&
+                   remaining >= (uintptr_t)KERNEL_LARGE_PAGE_SIZE) {
+            leaf_shift = KERNEL_LARGE_PAGE_SHIFT;
+            leaf_size = (uintptr_t)KERNEL_LARGE_PAGE_SIZE;
+        }
+        if (kernel_map_leaf(root, virtual_address, physical_address, flags,
+                            leaf_shift) != 0) {
             return 1;
         }
+        offset += leaf_size;
     }
     return 0;
 }
@@ -116,15 +170,13 @@ int kernel_bootstrap_mmu(void)
 
     uintptr_t ram_size = (uintptr_t)
         (kernel_boot_info->ram_size & KERNEL_PTE_ADDRESS_MASK);
-    for (uintptr_t page = 0; page < ram_size;
-         page += (uintptr_t)KERNEL_PAGE_SIZE) {
-        if (kernel_map_page(kernel_ptbr,
-                            (uintptr_t)KERNEL_DIRECT_MAP_BASE + page,
-                            page,
-                            KERNEL_PTE_VALID | KERNEL_PTE_READ |
-                            KERNEL_PTE_WRITE) != 0) {
-            return 1;
-        }
+    if (map_range(kernel_ptbr,
+                  (uintptr_t)KERNEL_DIRECT_MAP_BASE,
+                  0,
+                  ram_size,
+                  KERNEL_PTE_VALID | KERNEL_PTE_READ |
+                      KERNEL_PTE_WRITE) != 0) {
+        return 1;
     }
 
     if (map_kernel_range(kernel_ptbr,

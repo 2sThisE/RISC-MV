@@ -388,6 +388,49 @@ static void user_emit_movi64(uint8_t *code, size_t *cursor,
     user_emit_u64(code, cursor, value);
 }
 
+static uint8_t *user_wrap_test_program(const uint8_t *code,
+                                       size_t code_size,
+                                       size_t *size)
+{
+    if (code == NULL || code_size == 0 || size == NULL ||
+        code_size > KERNEL_PAGE_SIZE) {
+        return NULL;
+    }
+    *size = CVM_KERNEL_HEADER_SIZE + CVM_KERNEL_SEGMENT_SIZE + code_size;
+    uint8_t *data = kernel_calloc(1, *size);
+    if (data == NULL) return NULL;
+    static const uint8_t magic[8] = RISC_MV_EXF_MAGIC;
+    for (size_t i = 0; i < 8; ++i) data[i] = magic[i];
+    user_write_u16(data + 0x08, CVM_KERNEL_FORMAT_MAJOR);
+    user_write_u16(data + 0x0A, CVM_KERNEL_FORMAT_MINOR);
+    user_write_u32(data + 0x0C, CVM_KERNEL_HEADER_SIZE);
+    user_write_u32(data + 0x18, RARCH_M64_ISA_ID);
+    user_write_u32(data + 0x1C, CVM_ISA_VERSION);
+    data[0x20] = CVM_ADDRESS_BITS;
+    data[0x21] = CVM_BYTE_ORDER_LITTLE;
+    user_write_u16(data + 0x22, 1);
+    user_write_u32(data + 0x24, CVM_KERNEL_SEGMENT_SIZE);
+    user_write_u64(data + 0x28, CVM_KERNEL_HEADER_SIZE);
+    user_write_u64(data + 0x30, KERNEL_USER_IMAGE_BASE);
+    user_write_u64(data + 0x38, *size);
+
+    uint8_t *segment = data + CVM_KERNEL_HEADER_SIZE;
+    user_write_u32(segment + 0x00, CVM_SEGMENT_LOAD);
+    user_write_u32(segment + 0x04,
+                   CVM_SEGMENT_READ | CVM_SEGMENT_EXECUTE);
+    user_write_u64(segment + 0x08,
+                   CVM_KERNEL_HEADER_SIZE + CVM_KERNEL_SEGMENT_SIZE);
+    user_write_u64(segment + 0x10, KERNEL_USER_IMAGE_BASE);
+    user_write_u64(segment + 0x18, KERNEL_USER_IMAGE_BASE);
+    user_write_u64(segment + 0x20, code_size);
+    user_write_u64(segment + 0x28, KERNEL_PAGE_SIZE);
+    user_write_u64(segment + 0x30, KERNEL_PAGE_SIZE);
+    uint8_t *payload = segment + CVM_KERNEL_SEGMENT_SIZE;
+    for (size_t i = 0; i < code_size; ++i) payload[i] = code[i];
+    user_finalize_test_image(data, *size);
+    return data;
+}
+
 uint8_t *kernel_user_test_program_create(const char *message,
                                          uint32_t loop_count,
                                          size_t *size)
@@ -430,39 +473,20 @@ uint8_t *kernel_user_test_program_create(const char *message,
     user_write_u64(code + pointer_immediate,
                    KERNEL_USER_IMAGE_BASE + message_offset);
 
-    *size = CVM_KERNEL_HEADER_SIZE + CVM_KERNEL_SEGMENT_SIZE + cursor;
-    uint8_t *data = kernel_calloc(1, *size);
-    if (data == NULL) return NULL;
-    static const uint8_t magic[8] = RISC_MV_EXF_MAGIC;
-    for (size_t i = 0; i < 8; ++i) data[i] = magic[i];
-    user_write_u16(data + 0x08, CVM_KERNEL_FORMAT_MAJOR);
-    user_write_u16(data + 0x0A, CVM_KERNEL_FORMAT_MINOR);
-    user_write_u32(data + 0x0C, CVM_KERNEL_HEADER_SIZE);
-    user_write_u32(data + 0x18, RARCH_M64_ISA_ID);
-    user_write_u32(data + 0x1C, CVM_ISA_VERSION);
-    data[0x20] = CVM_ADDRESS_BITS;
-    data[0x21] = CVM_BYTE_ORDER_LITTLE;
-    user_write_u16(data + 0x22, 1);
-    user_write_u32(data + 0x24, CVM_KERNEL_SEGMENT_SIZE);
-    user_write_u64(data + 0x28, CVM_KERNEL_HEADER_SIZE);
-    user_write_u64(data + 0x30, KERNEL_USER_IMAGE_BASE);
-    user_write_u64(data + 0x38, *size);
+    return user_wrap_test_program(code, cursor, size);
+}
 
-    uint8_t *segment = data + CVM_KERNEL_HEADER_SIZE;
-    user_write_u32(segment + 0x00, CVM_SEGMENT_LOAD);
-    user_write_u32(segment + 0x04,
-                   CVM_SEGMENT_READ | CVM_SEGMENT_EXECUTE);
-    user_write_u64(segment + 0x08,
-                   CVM_KERNEL_HEADER_SIZE + CVM_KERNEL_SEGMENT_SIZE);
-    user_write_u64(segment + 0x10, KERNEL_USER_IMAGE_BASE);
-    user_write_u64(segment + 0x18, KERNEL_USER_IMAGE_BASE);
-    user_write_u64(segment + 0x20, cursor);
-    user_write_u64(segment + 0x28, KERNEL_PAGE_SIZE);
-    user_write_u64(segment + 0x30, KERNEL_PAGE_SIZE);
-    uint8_t *payload = segment + CVM_KERNEL_SEGMENT_SIZE;
-    for (size_t i = 0; i < cursor; ++i) payload[i] = code[i];
-    user_finalize_test_image(data, *size);
-    return data;
+uint8_t *kernel_user_fault_test_program_create(size_t *size)
+{
+    if (size == NULL) return NULL;
+    uint8_t code[16];
+    size_t cursor = 0;
+    user_emit_movi64(code, &cursor, 0, 0);
+    code[cursor++] = OP_LOAD64;
+    code[cursor++] = 1;
+    code[cursor++] = 0;
+    code[cursor++] = OP_HALT;
+    return user_wrap_test_program(code, cursor, size);
 }
 
 int kernel_user_loader_self_test(void)
