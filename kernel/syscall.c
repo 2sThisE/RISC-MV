@@ -3,6 +3,8 @@
 #include <cvm/mmio.h>
 
 #define KERNEL_SYSCALL_PATH_LIMIT 128U
+#define KERNEL_EXEC_VECTOR_LIMIT 32U
+#define KERNEL_EXEC_STRING_LIMIT 4096U
 
 #define TRAP_REGISTER(frame, reg) ((frame)[15U - (reg)])
 #define KERNEL_UINTPTR_MAX ((uintptr_t)-1)
@@ -223,6 +225,86 @@ static int64_t syscall_fsync(uint64_t fd)
     return okay ? 0 : -KERNEL_ERROR_IO;
 }
 
+static int copy_user_exec_vector(uintptr_t user_vector,
+                                 const char **vector,
+                                 size_t *count,
+                                 char *strings,
+                                 size_t *used)
+{
+    *count = 0;
+    if (user_vector == 0) return 0;
+    for (size_t index = 0; index <= KERNEL_EXEC_VECTOR_LIMIT; ++index) {
+        if (index > (KERNEL_UINTPTR_MAX - user_vector) / sizeof(uint64_t)) {
+            return KERNEL_ERROR_FAULT;
+        }
+        uint64_t user_string;
+        if (!kernel_copy_from_user(kernel_scheduler_current_space(),
+                                   &user_string,
+                                   user_vector + index * sizeof(uint64_t),
+                                   sizeof(user_string))) {
+            return KERNEL_ERROR_FAULT;
+        }
+        if (user_string == 0) return 0;
+        if (index == KERNEL_EXEC_VECTOR_LIMIT) return KERNEL_ERROR_TOO_BIG;
+        vector[index] = strings + *used;
+        for (;;) {
+            if (*used == KERNEL_EXEC_STRING_LIMIT) return KERNEL_ERROR_TOO_BIG;
+            uintptr_t offset = (uintptr_t)(*used -
+                (size_t)(vector[index] - strings));
+            if ((uintptr_t)user_string > KERNEL_UINTPTR_MAX - offset ||
+                !kernel_copy_from_user(kernel_scheduler_current_space(),
+                                       &strings[*used],
+                                       (uintptr_t)user_string + offset, 1)) {
+                return KERNEL_ERROR_FAULT;
+            }
+            char character = strings[(*used)++];
+            if (character == '\0') break;
+        }
+        *count = index + 1;
+    }
+    return KERNEL_ERROR_TOO_BIG;
+}
+
+static int syscall_exec(uint64_t *frame,
+                        uintptr_t user_path,
+                        uintptr_t user_arguments,
+                        uintptr_t user_environment,
+                        int64_t *result)
+{
+    char path[KERNEL_SYSCALL_PATH_LIMIT];
+    if (!copy_user_path(user_path, path)) {
+        *result = -KERNEL_ERROR_FAULT;
+        return 1;
+    }
+    KernelOpenFile *probe = kernel_vfs_open(path, KERNEL_VFS_OPEN_READ);
+    if (probe == NULL) {
+        *result = -KERNEL_ERROR_NO_ENTRY;
+        return 1;
+    }
+    kernel_vfs_file_release(probe);
+
+    const char *arguments[KERNEL_EXEC_VECTOR_LIMIT];
+    const char *environment[KERNEL_EXEC_VECTOR_LIMIT];
+    char strings[KERNEL_EXEC_STRING_LIMIT];
+    size_t used = 0;
+    size_t argument_count;
+    size_t environment_count;
+    int error = copy_user_exec_vector(user_arguments, arguments,
+                                      &argument_count, strings, &used);
+    if (error == 0) {
+        error = copy_user_exec_vector(user_environment, environment,
+                                      &environment_count, strings, &used);
+    }
+    if (error != 0) {
+        *result = -error;
+        return 1;
+    }
+    return kernel_scheduler_exec(frame, path,
+                                 argument_count, arguments,
+                                 environment_count, environment,
+                                 result);
+}
+
 void kernel_syscall_dispatch(uint64_t *frame)
 {
     if (frame == NULL || kernel_scheduler_current_space() == NULL) return;
@@ -271,6 +353,14 @@ void kernel_syscall_dispatch(uint64_t *frame)
                               (uint32_t)argument3);
     } else if (number == RARCHM64_SYS_FSYNC) {
         result = syscall_fsync(argument1);
+    } else if (number == RARCHM64_SYS_EXEC) {
+        if (!syscall_exec(frame,
+                          (uintptr_t)argument1,
+                          (uintptr_t)argument2,
+                          (uintptr_t)argument3,
+                          &result)) {
+            return;
+        }
     } else {
         result = -KERNEL_ERROR_NOT_IMPLEMENTED;
     }

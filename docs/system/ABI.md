@@ -136,6 +136,7 @@ reference kernel이 현재 사용하는 초기 syscall 번호는 다음과 같�
 | 9 | `close` | `R1=fd` |
 | 10 | `seek` | `R1=fd`, `R2=signed_offset`, `R3=whence` |
 | 11 | `fsync` | `R1=fd` |
+| 12 | `exec` | `R1=path`, `R2=argv`, `R3=envp` |
 
 `open`의 flags bit 0은 read, bit 1은 write, bit 2는 append이며 최소 read 또는
 write 하나가 필요하다. append는 write와 함께 써야 하고 각 write 직전에 현재
@@ -157,6 +158,19 @@ regular file의 `write`는 RMFS transaction group에 변경을 누적하며 `clo
 경로 복사도 매 바이트 주소 덧셈과 page 권한을 검사하며 NUL 없는 128바이트
 경로는 거부한다.
 
+`exec`의 `argv`와 `envp`는 각각 NULL로 끝나는 user pointer 배열이며 배열
+자체를 0으로 넘기면 빈 목록으로 취급한다. 각 목록은 최대 32개, 두 목록의
+문자열 저장소 합계는 최대 4096바이트다. kernel은 경로, 포인터 배열과 문자열을
+모두 기존 address space에서 먼저 복사하고 새 EXF, address space, user stack을
+완전히 준비한 뒤 한 번에 교체한다.
+
+성공하면 syscall 호출 지점으로 돌아오지 않고 새 EXF entry로 진입하며
+`R0/R1/R2=argc/argv/envp`와 초기 stack table을 다시 구성한다. PID, 현재 TID,
+parent/child 관계와 열린 FD table 및 open-file offset은 유지하고 같은 process의
+다른 software thread는 종료한다. 실패하면 기존 image, 실행 문맥, 다른 thread와
+FD table을 변경하지 않고 음수 errno를 반환한다. 현재 close-on-exec FD flag는
+정의하지 않는다.
+
 안정된 errno 번호는 다음과 같다. syscall은 아래 양수 값을 음수로 바꿔
 반환한다.
 
@@ -164,6 +178,7 @@ regular file의 `write`는 RMFS transaction group에 변경을 누적하며 `clo
 |---:|---|---|
 | 2 | `ENOENT` | 경로 없음 |
 | 5 | `EIO` | 장치/파일 I/O 실패 |
+| 8 | `ENOEXEC` | 실행 파일 형식/적재 검증 실패 |
 | 9 | `EBADF` | 잘못된 FD |
 | 10 | `ECHILD` | 기다릴 자식 없음 |
 | 11 | `EAGAIN` | 지금 완료할 수 없음 |

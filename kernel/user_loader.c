@@ -543,8 +543,18 @@ uint8_t *kernel_user_test_program_create(const char *message,
 uint8_t *kernel_user_fault_test_program_create(size_t *size)
 {
     if (size == NULL) return NULL;
-    uint8_t code[16];
+    uint8_t code[64];
     size_t cursor = 0;
+    user_emit_movi32(code, &cursor, 8, 64);
+    uint64_t loop_address = KERNEL_USER_IMAGE_BASE + cursor;
+    code[cursor++] = OP_ADDI32;
+    code[cursor++] = 8;
+    user_emit_u32(code, &cursor, UINT32_MAX);
+    code[cursor++] = OP_CMPI32;
+    code[cursor++] = 8;
+    user_emit_u32(code, &cursor, 0);
+    code[cursor++] = OP_JNZ;
+    user_emit_u64(code, &cursor, loop_address);
     user_emit_movi64(code, &cursor, 0, 0);
     code[cursor++] = OP_LOAD64;
     code[cursor++] = 1;

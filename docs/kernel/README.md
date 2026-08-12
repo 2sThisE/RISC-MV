@@ -37,7 +37,7 @@
 13. syscall vector 76에 dispatcher를 연결하고 page별 user 권한을 먼저
     검증하는 `copy_from_user`/`copy_to_user`로 잘못된 포인터와 overflow를
     fault 없이 거부한다. 초기 ABI는 `exit`, FD 기반 `write`/`read`, `yield`,
-    `getpid`, `wait`, `waitpid`, `join`, `open`, `close`, `seek`, `fsync`다.
+    `getpid`, `wait`, `waitpid`, `join`, `open`, `close`, `seek`, `fsync`, `exec`다.
 14. `/BIN/INIT.EXF`를 읽어 PID 1 process로 만들고, 동적
     `KernelProcess`/`KernelThread` 객체로 총 2개 process와 3개 thread를 만든다.
     init의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 16KiB
@@ -57,11 +57,19 @@
     PMM free-page 수가 기준값으로 정확히 돌아오는지 확인한다. 이 검사가 모두
     성공해야 `KERNEL: READY`를 출력한다.
 
+`exec`는 새 EXF와 argc/argv/envp stack을 별도 address space에 먼저 완성한 뒤
+현재 process image를 교체한다. 성공 시 PID/TID와 FD table을 보존하고 다른
+software thread를 정리하며, 실패 시 기존 image/thread/FD 상태로 계속 실행한다.
+init 회귀는 존재하지 않는 파일, 비-EXF 파일과 잘못된 user pointer 실패 뒤에도
+계속 실행되는지 검사하고, self-exec 뒤 전달된 argv/envp와 기존 FD 3의 offset 및
+읽기를 확인한다.
+
 init 통합 검사가 실패하면 더 이상 모든 원인을 `ARGS ERROR`로 합치지 않고
 `INIT: ERROR X`를 출력한다. `A/B`는 argc/argv, `C/D`는 waitpid 결과/status,
-`E/F`는 join 결과/status, `G`~`Q`는 open/seek/read/write/fsync/close와 잘못된
-user pointer 거부 단계다. 이 코드는 반복 부팅에서 최초 실패 지점을 보존하기
-위한 회귀 진단 ABI이며 정상 출력은 기존 `INIT: FILE/WAIT/JOIN OK`다.
+`E/F`는 join 결과/status, `G`~`Q`는 파일 syscall, `R`~`V`는 exec 실패
+rollback, `W`~`Z`는 새 image의 argv/envp와 FD 유지 단계다. 이 코드는 반복
+부팅에서 최초 실패 지점을 보존하기 위한 회귀 진단 ABI이며 정상 출력은
+`INIT: EXEC/FD OK`다.
 
 빌드는 프로젝트 루트에서 실행한다.
 

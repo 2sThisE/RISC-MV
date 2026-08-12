@@ -58,7 +58,8 @@
 3개 process, 4개 thread를 선점 실행한다. user fault는 해당 process에 격리하고
 부모 없는 zombie는 안전한 다음 trap에서 수거한다. parent/child와 process
 `wait`/`waitpid`, thread `join`의 `BLOCKED -> RUNNABLE` wakeup은 구현됐다.
-file descriptor, 일반 wait queue/idle과 SMP kernel scheduler는 아직 없다.
+process별 file descriptor와 transactional `exec`도 구현됐으며 일반 wait
+queue/idle과 SMP kernel scheduler는 아직 없다.
 
 ## P0 — 현재 차단 항목
 
@@ -148,8 +149,8 @@ parent/child와 wait 가능한 zombie는 P1.3-B, process별 FD table은 P1.3-D,
 - [x] `include/rarchm64_syscall.h`를 syscall 번호/open flag/seek/fsync/errno의
   ABI v1 단일 기준으로 추가하고 ABI 문서와 동기화
 - [x] process 종료 시 모든 FD slot 참조를 닫고 vnode/open-file을 최종 회수
-- [ ] in-place `exec` syscall 도입 시 성공하면 FD를 유지하고 실패하면 image와
-  FD table을 모두 원상 유지하는 transactional 교체 규칙
+- [x] in-place `exec`가 새 EXF와 argc/argv/envp stack을 먼저 완성한 뒤 image를
+  교체하고, 성공 시 PID/TID/FD를 유지하며 실패 시 image/thread/FD를 원상 유지
 - [x] 서로 다른 process의 FD table 격리와 중복 close/NULL user pointer를
   실제 init syscall로 거부하는 회귀 테스트
 
@@ -165,8 +166,8 @@ parent/child와 wait 가능한 zombie는 P1.3-B, process별 FD table은 P1.3-D,
 - [ ] keyboard IRQ ring buffer와 blocking `read`
 - [ ] interrupt context에서 할당/수면하지 않는 IRQ-safe queue와 lock 규칙
 - [ ] IRQ-before-sleep, timeout-vs-completion과 wakeup 유실 경쟁 테스트
-- [x] init 통합 실패를 `A`~`Q` 단계 코드로 분리하고 동일 persistent image
-  20회 반복 부팅으로 wait/join 및 파일 syscall 경로 무실패 확인
+- [x] init 통합 실패를 `A`~`Z` 단계 코드로 분리하고 동일 persistent image
+  반복 부팅으로 wait/join, 파일 syscall과 exec rollback/FD 유지 경로 확인
 
 완료 조건: I/O를 기다리는 thread가 CPU를 polling하지 않고 다른 runnable
 thread가 계속 실행되어야 한다.
@@ -224,7 +225,8 @@ regular file을 읽고 생성·교체할 수 있어야 한다. 일반 파일시�
 - [x] user fault가 해당 process에만 격리
 - [ ] file/keyboard/block I/O가 FD와 blocking syscall로 동작
 - [x] process 종료 후 현재 PMM page, heap과 process/thread wait 상태 누수 없음
-- [ ] FD와 일반 wait queue 도입 뒤 해당 자원 누수 없음
+- [x] process 종료와 exec에서 FD 참조/offset 소유권 유지 및 정리
+- [ ] 일반 wait queue 도입 뒤 waiter/timeout 자원 누수 없음
 - [x] 현재 단계 전체 unit test와 실제 GPT/FAT32+RMFS boot regression 통과
 
 ## P1.4 — SMP kernel과 hardware-thread 활용
@@ -335,7 +337,7 @@ version, object metadata, tool 진단과 호환성 테스트를 함께 변경한
 
 ## 바로 시작할 작업
 
-1. P1.3-D의 transactional in-place `exec`와 FD 유지 규칙 구현
-2. P1.3-E scheduler wait queue와 wake-one/wake-all primitive 구현
-3. timer 기반 `sleep`과 runnable thread가 없을 때 idle/`WAIT` 경로 구현
-4. block driver를 early-boot polling과 scheduler 이후 IRQ mode로 분리
+1. P1.3-E scheduler wait queue와 wake-one/wake-all primitive 구현
+2. timer 기반 `sleep`과 runnable thread가 없을 때 idle/`WAIT` 경로 구현
+3. block driver를 early-boot polling과 scheduler 이후 IRQ mode로 분리
+4. keyboard IRQ ring buffer와 blocking `read` 구현

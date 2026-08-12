@@ -52,6 +52,7 @@
 #define KERNEL_ERROR_TOO_BIG RARCHM64_EFBIG
 #define KERNEL_ERROR_IO RARCHM64_EIO
 #define KERNEL_ERROR_NO_ENTRY RARCHM64_ENOENT
+#define KERNEL_ERROR_EXEC_FORMAT RARCHM64_ENOEXEC
 #define KERNEL_ERROR_DEADLOCK RARCHM64_EDEADLK
 #define KERNEL_ERROR_NOT_IMPLEMENTED RARCHM64_ENOSYS
 
@@ -186,6 +187,13 @@ int kernel_scheduler_waitpid(uint64_t *frame,
 int kernel_scheduler_join(uint64_t *frame,
                           uint64_t tid,
                           uintptr_t status_address,
+                          int64_t *result);
+int kernel_scheduler_exec(uint64_t *frame,
+                          const char *path,
+                          size_t argument_count,
+                          const char *const *arguments,
+                          size_t environment_count,
+                          const char *const *environment,
                           int64_t *result);
 int kernel_scheduler_register_process(KernelProcess *process);
 void kernel_scheduler_exit(uint64_t *frame, int64_t status);

@@ -34,6 +34,7 @@ static size_t scheduler_wait_reap_count;
 static size_t scheduler_join_block_count;
 static size_t scheduler_join_wake_count;
 static size_t scheduler_join_reap_count;
+static size_t scheduler_exec_count;
 static int scheduler_completion_error;
 static int scheduler_active;
 static int scheduler_init_from_disk;
@@ -464,6 +465,7 @@ static void scheduler_finish(void)
                   scheduler_join_block_count == 1 &&
                   scheduler_join_wake_count == 1 &&
                   scheduler_join_reap_count == 1 &&
+                  scheduler_exec_count == 1 &&
                   scheduler_reaped_process_count + 1 ==
                       scheduler_completed_process_count &&
                   scheduler_processes.count == 1 &&
@@ -499,6 +501,8 @@ static void scheduler_finish(void)
         kernel_uart_put_hex64(scheduler_join_wake_count);
         kernel_uart_puts("/");
         kernel_uart_put_hex64(scheduler_join_reap_count);
+        kernel_uart_puts(" exec=");
+        kernel_uart_put_hex64(scheduler_exec_count);
         kernel_uart_puts(" processes=");
         kernel_uart_put_hex64(scheduler_processes.count);
         kernel_uart_puts(" reapq=");
@@ -667,6 +671,133 @@ int kernel_scheduler_join(uint64_t *frame,
     ++scheduler_join_block_count;
     scheduler_current = next;
     scheduler_load(waiter, next, frame);
+    return 0;
+}
+
+static void scheduler_exec_discard_other_threads(KernelProcess *process,
+                                                  KernelThread *current)
+{
+    KernelListNode *node = process->threads.sentinel.next;
+    while (node != &process->threads.sentinel) {
+        KernelThread *thread = scheduler_process_thread_from_node(node);
+        node = node->next;
+        if (thread == current) continue;
+        if (thread->queued) {
+            kernel_list_remove(&scheduler_run_queue, &thread->run_node);
+            thread->queued = 0;
+        }
+        if (thread->reap_queued) {
+            kernel_list_remove(&scheduler_thread_reap_queue,
+                               &thread->reap_node);
+            thread->reap_queued = 0;
+        }
+        if (thread->wait_tid != 0) {
+            KernelThread *target = scheduler_find_thread(
+                process, thread->wait_tid);
+            if (target != NULL && target->join_waiter == thread) {
+                target->join_waiter = NULL;
+            }
+        }
+        thread->join_waiter = NULL;
+        kernel_list_remove(&process->threads, &thread->process_node);
+        thread->state = KERNEL_THREAD_DEAD;
+        thread->process = NULL;
+        kernel_free(thread->kernel_stack);
+        kernel_free(thread);
+    }
+    process->thread_count = 1;
+    process->live_thread_count = 1;
+}
+
+static void scheduler_copy_user_image(KernelUserImage *destination,
+                                      const KernelUserImage *source)
+{
+    destination->address_space = source->address_space;
+    destination->entry = source->entry;
+    destination->stack_pointer = source->stack_pointer;
+    destination->image_base = source->image_base;
+    destination->image_end = source->image_end;
+}
+
+int kernel_scheduler_exec(uint64_t *frame,
+                          const char *path,
+                          size_t argument_count,
+                          const char *const *arguments,
+                          size_t environment_count,
+                          const char *const *environment,
+                          int64_t *result)
+{
+    if (result == NULL) return 1;
+    if (frame == NULL || path == NULL ||
+        kernel_scheduler_current_space() == NULL) {
+        *result = -KERNEL_ERROR_INVALID;
+        return 1;
+    }
+
+    scheduler_reap_deferred();
+    KernelUserImage new_image;
+    if (kernel_user_image_load_path(path, KERNEL_INIT_IMAGE_MAXIMUM,
+                                    &new_image) != 0) {
+        *result = -KERNEL_ERROR_EXEC_FORMAT;
+        return 1;
+    }
+
+    KernelProcess prepared_process;
+    scheduler_copy_user_image(&prepared_process.image, &new_image);
+    KernelThread prepared_thread;
+    prepared_thread.process = &prepared_process;
+    prepared_thread.state = KERNEL_THREAD_NEW;
+    prepared_thread.user_stack_top = new_image.stack_pointer;
+    prepared_thread.user_stack_bottom = new_image.stack_pointer -
+                                        (uintptr_t)KERNEL_USER_STACK_SIZE;
+    for (size_t reg = 0; reg < 15; ++reg) prepared_thread.registers[reg] = 0;
+    if (kernel_thread_set_startup(&prepared_thread,
+                                  argument_count, arguments,
+                                  environment_count, environment) != 0) {
+        kernel_user_image_destroy(&new_image);
+        *result = -KERNEL_ERROR_TOO_BIG;
+        return 1;
+    }
+
+    KernelThread *thread = scheduler_current;
+    KernelProcess *process = thread->process;
+    KernelUserImage old_image;
+    scheduler_copy_user_image(&old_image, &process->image);
+    scheduler_exec_discard_other_threads(process, thread);
+    scheduler_copy_user_image(&process->image, &new_image);
+    process->next_stack_slot = 1;
+    process->exit_status = -1;
+    process->fault_cause = 0;
+    process->fault_address = 0;
+    process->fault_info = 0;
+    process->faulted = 0;
+    process->state = KERNEL_PROCESS_ACTIVE;
+
+    for (size_t reg = 0; reg < 15; ++reg) {
+        thread->registers[reg] = prepared_thread.registers[reg];
+        TRAP_REGISTER(frame, reg) = prepared_thread.registers[reg];
+    }
+    thread->pc = new_image.entry;
+    thread->flags = KERNEL_CPU_FLAG_INTERRUPT_ENABLE;
+    thread->stack_pointer = prepared_thread.stack_pointer;
+    thread->user_stack_bottom = prepared_thread.user_stack_bottom;
+    thread->user_stack_top = prepared_thread.user_stack_top;
+    thread->exit_status = -1;
+    thread->wait_pid = 0;
+    thread->wait_status_address = 0;
+    thread->wait_tid = 0;
+    thread->join_status_address = 0;
+    thread->join_waiter = NULL;
+    thread->state = KERNEL_THREAD_RUNNING;
+    TRAP_PC(frame) = thread->pc;
+    TRAP_FLAGS(frame) = thread->flags | KERNEL_SAVED_USER_MODE |
+                        (TRAP_FLAGS(frame) & KERNEL_SAVED_EXCEPTION_FRAME);
+    TRAP_USER_SP(frame) = thread->stack_pointer;
+    cvm_set_ptbr((uint64_t)kernel_address_space_root(
+        process->image.address_space));
+    cvm_set_ksp((uint64_t)thread->kernel_stack_top);
+    kernel_user_image_destroy(&old_image);
+    ++scheduler_exec_count;
     return 0;
 }
 
@@ -896,6 +1027,7 @@ int kernel_scheduler_self_test(void)
     scheduler_join_block_count = 0;
     scheduler_join_wake_count = 0;
     scheduler_join_reap_count = 0;
+    scheduler_exec_count = 0;
     scheduler_completion_error = 0;
     scheduler_init_from_disk = 0;
     kernel_list_init(&scheduler_processes);
