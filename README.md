@@ -2,7 +2,8 @@
 
 RISC-MV(Minimal Virtualization)는 이 프로젝트의 독자 ISA 계열이다. 현재
 구현하는 64비트 아키텍처는 `RArchM64`이며 64비트 정수, SIMD와 부동소수점,
-MMU·예외·멀티코어, 동적 VIO 장치와 GPT/FAT32 부팅을 지원한다.
+MMU·예외·멀티코어, 동적 VIO 장치와 GPT/FAT32 부팅 및 RMFS system
+파일시스템을 지원한다.
 
 정식 실행파일 포맷은 `.exf`(RISC-MV Executable File v1)다. 기존 `.cvm`
 실행파일은 지원하지 않는다. `Cvm*`, `CVM_*`, `cvmclang` 같은 이름은 기존
@@ -139,15 +140,16 @@ build/
 `k`, `m`, `g`는 각각 KiB, MiB, GiB다. 예를 들어 `-r 1m`은
 1,048,576 byte를 할당한다.
 
-부팅 예제는 ROM에서 시작해 VIO block device의 GPT/FAT32 파티션에서
-`BOOT.EXF`와 `KERNEL.EXF`를 읽는다. reference kernel은 BootInfo, PMM,
+부팅 예제는 ROM에서 시작해 VIO block device의 GPT/FAT32 boot partition에서
+`BOOT.EXF`와 `KERNEL.EXF`를 읽는다. reference kernel은 별도 RMFS system
+partition을 `/`로 마운트해 `/BIN/INIT.EXF`를 실행하며 BootInfo, PMM,
 MMU, VBR, W^X와 page-fault 복구를 검사하고 성공하면 UART에
 `KERNEL: READY`를 출력한다.
 
 장치를 빌드하면 DLL이 `build/devices`와 `build/modules`에 동시에
 생성된다. 설정이 필수인 block 장치는 `.conf`도 자동 생성되며, boot 예제를
 함께 빌드하면 생성된 `system.img`를 쓰기 가능으로 연결하도록 갱신된다.
-reference kernel의 FAT32 자체 검사는 `/BOOT/KTEST.TXT`를 생성·교체한다.
+reference kernel의 RMFS 자체 검사는 `/KTEST.TXT`를 생성·교체한다.
 파일 내용은 고정된 읽기/쓰기 회귀 표식이며 부팅이 끝나도 자동 삭제하지
 않는다.
 

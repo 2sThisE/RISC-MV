@@ -5,12 +5,14 @@
 
 1. C로 작성된 초기 bootstrap이 `CvmBootInfo` handoff와 CRC32를 검증하고
    early UART를 설정한다.
-2. `CVM_MEMORY_USABLE` 범위의 완전한 4KiB 페이지로 free-list 물리
-   페이지 할당자를 구성한다.
-3. `0x100000000 + physical` direct-map으로 물리 page free-list를 접근하고
-   할당과 반환을 자체 검사한다.
+2. `CVM_MEMORY_USABLE` 항목을 범위 커서로 등록한다. 초기화할 때 RAM 전체를
+   건드리지 않고, 새 페이지는 범위에서 지연 할당하며 반환된 페이지는 별도
+   재사용 free-list에 넣는다.
+3. `0x100000000 + physical` direct-map으로 실제 할당된 4KiB 페이지만 0으로
+   초기화하고 할당과 반환을 자체 검사한다.
 4. 부트로더의 MMU-on handoff를 검증한 뒤 자체 3단계 페이지 테이블을 만든다.
-   커널 text는 RX, rodata는 R, data와 stack은 RW, direct-map은 RW/NX다.
+   커널 text는 RX, rodata는 R, data와 전체 BSS/stack은 RW,
+   direct-map은 RW/NX다.
    direct-map은 정렬과 남은 길이가 허용하는 가장 큰 1GiB/2MiB/4KiB leaf를
    순서대로 선택하며 나머지 커널 매핑은 기본적으로 4KiB leaf를 사용한다.
 5. 새 PTBR로 교체하고 부트로더가 만든 임시 page-table arena를 회수한다.
@@ -29,20 +31,37 @@
     주소 범위, segment 중첩과 W^X를 검증해 user RX/R/RW page와 64KiB stack을
     적재한다. guard page와 supervisor mapping의 user 접근 차단도 검사한다.
 12. VIO hub에서 block/키보드/display 장치를 찾고 supervisor MMIO alias로
-    매핑한다. block DMA bounce page로 GPT의 FAT32 boot partition을 마운트해
-    8.3 경로 파일 읽기, 생성, 교체와 flush를 검사한다.
+    매핑한다. GPT의 RMFS system partition을 `/`로 마운트해 긴 이름 경로,
+    파일 읽기, 생성, 교체, append와 flush를 검사한다. FAT32 boot partition은
+    firmware/bootloader 전용으로 유지한다.
 13. syscall vector 76에 dispatcher를 연결하고 page별 user 권한을 먼저
     검증하는 `copy_from_user`/`copy_to_user`로 잘못된 포인터와 overflow를
-    fault 없이 거부한다. 초기 ABI는 `exit`, `write`, `read`, `yield`, `getpid`다.
-14. 동적 `KernelProcess`/`KernelThread` 객체로 3개 process와 4개 thread를 만든다.
-    첫 process의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 16KiB
+    fault 없이 거부한다. 초기 ABI는 `exit`, FD 기반 `write`/`read`, `yield`,
+    `getpid`, `wait`, `waitpid`, `join`, `open`, `close`, `seek`, `fsync`다.
+14. `/BIN/INIT.EXF`를 읽어 PID 1 process로 만들고, 동적
+    `KernelProcess`/`KernelThread` 객체로 총 2개 process와 3개 thread를 만든다.
+    init의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 16KiB
     kernel stack을 사용한다. timer IRQ 0에서 전체 GPR, PC, FLAGS와 SP를
     저장·교체하며, 주소 공간이 바뀔 때만 PTBR을 교체한다. 모든 syscall 출력,
     종료와 timer 선점이 관측되어야 한다. 한 process는 의도적으로 NULL user
     load page fault를 일으키며, 해당 process만 종료되고 나머지가 계속 실행해야
-    한다. 부모 없는 zombie는 reap queue에 들어간 뒤 다음 thread의 trap에서
-    address space, user page와 user/kernel stack을 해제한다. 이 검사가 모두
+    한다. fault process는 init의 자식으로 구성한다. init의 `waitpid`는
+    자식이 종료할 때까지 `BLOCKED`가 되고, 자식의 fault exit status를 user
+    공간에 복사한 뒤 `RUNNABLE`로 깨어나 자식을 수거한다. 부모 없는 zombie는
+    reap queue에 들어간 뒤 다음 thread의 trap에서 address space, user page와
+    user/kernel stack을 해제한다. 같은 process의 worker thread는 `join`으로
+    기다리고, 종료 뒤 user stack page와 kernel stack을 deferred reap한다.
+    최초 thread의 stack에는 16바이트 정렬된 argc/argv/envp 테이블을 만들고
+    R0/R1/R2에도 같은 진입 인자를 전달한다. 별도 수명 검사는 parent/child
+    process와 여러 thread를 8회 생성·파괴하며
+    PMM free-page 수가 기준값으로 정확히 돌아오는지 확인한다. 이 검사가 모두
     성공해야 `KERNEL: READY`를 출력한다.
+
+init 통합 검사가 실패하면 더 이상 모든 원인을 `ARGS ERROR`로 합치지 않고
+`INIT: ERROR X`를 출력한다. `A/B`는 argc/argv, `C/D`는 waitpid 결과/status,
+`E/F`는 join 결과/status, `G`~`Q`는 open/seek/read/write/fsync/close와 잘못된
+user pointer 거부 단계다. 이 코드는 반복 부팅에서 최초 실패 지점을 보존하기
+위한 회귀 진단 ABI이며 정상 출력은 기존 `INIT: FILE/WAIT/JOIN OK`다.
 
 빌드는 프로젝트 루트에서 실행한다.
 
@@ -54,17 +73,18 @@
 legacy 이름의 `cvmlink`로 `kernel.exf`와 `kernel.map`을 생성한다.
 
 - `kernel_main.c`: BootInfo 검증, UART와 전체 부팅 순서
-- `pmm.c`: 물리 페이지 free-list
+- `pmm.c`: 범위 기반 지연 물리 페이지 할당과 반환 페이지 재사용 free-list
 - `mmu.c`: 4KiB/2MiB/1GiB leaf를 지원하는 3단계 페이지 테이블과 MMU 전환
 - `heap.c`: 동적 가상주소 기반 kernel heap
 - `runtime.c`: list, byte queue, bitmap과 spinlock
-- `address_space.c`: 프로세스별 page table과 user page 관리
+- `address_space.c`: 프로세스별 page table, user page 매핑과 범위 unmap
 - `user_loader.c`: 고정 가상주소 RISC-MV EXF 사용자 이미지 loader
-- `process.c`: 동적 PID/TID, Process/Thread 생성과 독립 stack 소유권
+- `process.c`: 동적 PID/TID, parent/child Process, Thread stack과 수명 검사
 - `devices.c`: VIO 검색, block/키보드/display와 내장 MMIO 장치 연결
-- `fat32.c`, `vfs.c`: FAT32 8.3 파일 읽기/쓰기와 단일 root VFS
-- `syscall.c`: dispatcher, 표준 입출력 syscall과 user-copy 검증
-- `scheduler.c`: intrusive runnable queue, timer 선점과 trap-frame 문맥 교환
+- `fat32.c`: firmware 호환 FAT32 구현 자료
+- `rmfs.c`, `vfs.c`: RMFS extent/bitmap 파일 읽기·쓰기와 단일 root VFS
+- `syscall.c`: dispatcher, 표준 입출력·wait syscall과 user-copy 검증
+- `scheduler.c`: runnable/reap queue, timer 선점, wait/join wakeup과 문맥 교환
 - `exception.c`: VBR 구성, page-fault 정책, panic과 보호 자체 검사
 - `kernel.s`: entry, 예외/trap GPR 보존, user 진입, `IRET`, fault probe
 - `layout_start.s`, `layout_end.s`: 전체 section 경계와 bootstrap stack
@@ -80,7 +100,7 @@ layout 오브젝트는 여러 C/assembly 오브젝트를 링크해도 전체 `.t
 `.rodata`, `.data`, `.bss`의 시작과 끝 심볼이 올바르게 잡히게 한다. 커널은
 `0x40000000` 고정 가상주소로 링크되지만 물리주소는 이미지에 고정하지 않는다.
 부트로더가 펌웨어 USABLE map에서 first-fit 물리 base를 선택하며 빌드 스크립트는
-1 MiB 최소 RAM에서 image span, 임시 page table과 RAM 상단 staging이 함께
+2 MiB 최소 boot RAM에서 image span, 임시 page table과 RAM 상단 staging이 함께
 들어갈 수 있는지 검사한다.
 
 복구할 수 없는 예외는 UART에 `ECAUSE`, `EPC`, `BADADDR`, `EINFO`를 64비트
@@ -95,7 +115,7 @@ layout 오브젝트는 여러 C/assembly 오브젝트를 링크해도 전체 `.t
 0x40000000..text_end supervisor RX kernel text
 next 4KiB section   supervisor R kernel rodata
 next 4KiB section   supervisor RW kernel data
-kernel_stack_bottom..kernel_stack_top (24KiB) supervisor RW kernel stack
+kernel_bss_start..kernel_bss_end supervisor RW globals and 24KiB bootstrap stack
 0x3FFFF000          supervisor RW UART alias
 0x3F000000          supervisor RW VIO hub alias
 0x3F001000          supervisor RW IRQ controller alias
@@ -120,17 +140,47 @@ syscall은 동일한 trap-frame wrapper를 사용하고 scheduler가 선택된 t
 frame과 kernel SP를 적용한 뒤, process가 달라질 때만 PTBR을 바꾼다.
 
 현재 상태 전이는 생성 시 `NEW`, runnable queue 등록 시 `RUNNABLE`, dequeue 시
-`RUNNING`, syscall exit 또는 user fault 시 `ZOMBIE`, deferred reap 시 `DEAD`다.
-마지막 thread가 종료되면 process도 `ZOMBIE`가 된다. 부모가 없는 process는
-현재 kernel stack에서 빠져나온 다음 trap에서 자동 수거한다. parent/child와
-`wait`/`waitpid`, `join`, `init` 재부모화 및 `BLOCKED` wakeup은 아직 없다.
+`RUNNING`, 실행 중인 자식을 기다릴 때 `BLOCKED`, 자식 종료 통지를 받으면 다시
+`RUNNABLE`, syscall exit 또는 user fault 시 `ZOMBIE`, deferred reap 시 `DEAD`다.
+마지막 thread가 종료되면 process도 `ZOMBIE`가 된다. 부모가 있는 zombie는
+부모의 child list에 남아 `wait`/`waitpid`로 한 번만 수거되며, 부모 없는
+process는 현재 kernel stack에서 빠져나온 다음 trap에서 자동 수거한다. 부모가
+먼저 종료하면 남은 자식은 살아 있는 PID 1 init으로 재부모화한다. init 자체가
+종료한 뒤 부모가 없어진 zombie는 자동 수거한다.
 
-현재 VFS는 boot partition 하나를 `/`로 취급하며 FAT32 short 8.3 이름을
-지원한다. 파일 읽기와 같은 디렉터리 안의 파일 생성·교체는 가능하지만 LFN,
-디렉터리 생성/삭제와 프로세스별 descriptor table은 P1.3 범위다. FAT 탐색은
-최근 primary FAT sector를 cache하고, 새 cluster 할당은 FAT32 FSInfo의
-`next_free` hint에서 시작한다. 파일 데이터는 물리적으로 연속된 cluster를
-최대 4KiB(8 sector) 단위로 묶어 읽는다.
+현재 `waitpid`는 정확한 양의 PID를, `wait`는 임의의 자식을 기다린다. exit
+status는 signed 64비트 값으로 user 주소에 기록하며 null status 포인터는 값을
+버리는 의미다. `join`은 같은 process의 다른 TID만 대상으로 하며, 한 target에
+한 waiter만 등록한다. target이 끝나면 status를 전달하고 target user stack을
+unmap한 뒤 현재 kernel stack에서 벗어난 trap에서 객체와 kernel stack을
+수거한다. self-join은 `-EDEADLK`, 중복 join은 `-EBUSY`로 거부한다.
+
+실행 가능한 다른 thread가 없는 동안 살아 있는 대상을 기다리는 idle/`WAIT`
+경로와 `WNOHANG` 옵션은 아직 없다. 현재 이 경우의 `waitpid`/`join`은 임시로
+`-EAGAIN`을 반환한다.
+
+현재 VFS는 RMFS system partition을 `/`로 마운트한다. RMFS는 최대 239바이트
+case-sensitive 이름, 256바이트 inode, inline extent 6개, inode/block bitmap과
+주/백업 CRC32 superblock을 사용한다. 파일 읽기와 기존 디렉터리 안의 regular
+file 생성·전체 교체·4KiB block 단위 COW 부분 쓰기·append, 디렉터리 data block
+자동 확장과 최대 6개 조각 extent 할당이 가능하다. 부분 쓰기는 변경 block만
+새로 할당하고 기존 앞뒤 extent를 분할·재사용·병합하며 EOF 이후 hole은 0으로
+채운다. 디렉터리 생성, 삭제/rename과 journal
+replay는 후속 범위다. 각 process는 32-slot FD table을 소유하며,
+FD slot은 참조 횟수가 있는 open-file handle을 가리키고 handle은 다시 vnode를
+소유한다. FD 조회는 임시 참조를 얻고 close/process 종료는 slot 참조를 놓는다.
+마지막 handle 참조가 사라지면 vnode와 경로 저장소도 함께 해제된다. 새 process는
+FD 0에 read-only keyboard pseudo-vnode, FD 1과 2에 write-only UART
+pseudo-vnode를 기본 설치한다. RMFS metadata/data 접근은 filesystem lock으로,
+공용 block DMA bounce page는 block lock으로 직렬화한다. 4KiB scratch block은
+전역 lock 아래 재사용해 16KiB per-thread kernel stack을 소모하지 않는다.
+RMFS bitmap은 mount 동안 cache하고 inode/directory는 64-entry metadata block
+cache로 유지한다. 변경은 volume transaction group에 누적되어 같은 metadata
+block을 한 번만 기록하며 `fsync` 또는 32개 write에서 CLEAN commit과 flush를
+수행한다. `close`는 암묵적 sync가 아니다. metadata CRC32는 lookup table로
+계산하고 DIRTY 이후 I/O 실패는 volume을 unmount해 불완전한 transaction 위에서
+쓰기를 계속하지 않는다. 온디스크 journal replay는 아직 후속 범위다.
+세부 온디스크 규격은 [RMFS.md](../system/RMFS.md)에 있다.
 
 block 장치의 호스트 worker는 event 기반으로 잠들지만, boot 초기와 현재 kernel
 driver의 완료 확인은 `STATUS` polling이다. block IRQ 기반 sleep/wakeup과 keyboard

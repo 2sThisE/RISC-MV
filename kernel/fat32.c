@@ -405,6 +405,9 @@ int kernel_fat32_mount(void)
     return kernel_fat.total_clusters >= UINT32_C(65525);
 }
 
+#if 0
+/* The range reader below is the single maintained data path. This older
+   run-coalescing whole-file implementation remains as a source reference. */
 int kernel_fat32_read_file(const char *path,
                            void *buffer,
                            size_t capacity,
@@ -491,6 +494,110 @@ int kernel_fat32_read_file(const char *path,
         }
     }
     return consumed == size;
+}
+#endif
+
+int kernel_fat32_file_size(const char *path, size_t *file_size)
+{
+    if (!kernel_fat.mounted || file_size == NULL) return 0;
+    uint32_t directory;
+    uint8_t name[11];
+    if (!fat_resolve_parent(path, &directory, name)) return 0;
+    FatDirectoryEntry entry;
+    if (!fat_find_entry(directory, name, &entry, NULL) || !entry.found ||
+        (entry.bytes[11] & FAT_ATTRIBUTE_DIRECTORY) != 0) {
+        return 0;
+    }
+    *file_size = (size_t)fat_read_u32(entry.bytes + 28);
+    return 1;
+}
+
+int kernel_fat32_read_range(const char *path,
+                            size_t offset,
+                            void *buffer,
+                            size_t capacity,
+                            size_t *read_size)
+{
+    if (!kernel_fat.mounted || read_size == NULL ||
+        (buffer == NULL && capacity != 0)) {
+        return 0;
+    }
+    *read_size = 0;
+    uint32_t directory;
+    uint8_t name[11];
+    if (!fat_resolve_parent(path, &directory, name)) return 0;
+    FatDirectoryEntry entry;
+    if (!fat_find_entry(directory, name, &entry, NULL) || !entry.found ||
+        (entry.bytes[11] & FAT_ATTRIBUTE_DIRECTORY) != 0) {
+        return 0;
+    }
+    size_t file_size = fat_read_u32(entry.bytes + 28);
+    if (capacity == 0 || offset >= file_size) return 1;
+    size_t amount = file_size - offset;
+    if (amount > capacity) amount = capacity;
+    size_t cluster_bytes = (size_t)kernel_fat.sectors_per_cluster *
+                           FAT_SECTOR_SIZE;
+    size_t skip_clusters = offset / cluster_bytes;
+    size_t cluster_offset = offset % cluster_bytes;
+    uint32_t cluster = fat_entry_cluster(entry.bytes);
+    uint32_t traversed = 0;
+    while (skip_clusters != 0) {
+        uint32_t next;
+        if (!fat_cluster_valid(cluster) || !fat_get(cluster, &next) ||
+            next >= UINT32_C(0x0FFFFFF8) ||
+            ++traversed > kernel_fat.total_clusters) {
+            return 0;
+        }
+        cluster = next;
+        --skip_clusters;
+    }
+    uint8_t sector[FAT_SECTOR_SIZE];
+    uint8_t *output = buffer;
+    size_t copied = 0;
+    while (copied < amount && fat_cluster_valid(cluster)) {
+        uint32_t sector_index = (uint32_t)(cluster_offset / FAT_SECTOR_SIZE);
+        size_t sector_offset = cluster_offset % FAT_SECTOR_SIZE;
+        while (sector_index < kernel_fat.sectors_per_cluster &&
+               copied < amount) {
+            if (!kernel_block_read(fat_cluster_lba(cluster) + sector_index,
+                                   sector, 1)) {
+                return 0;
+            }
+            size_t chunk = FAT_SECTOR_SIZE - sector_offset;
+            if (chunk > amount - copied) chunk = amount - copied;
+            for (size_t i = 0; i < chunk; ++i) {
+                output[copied + i] = sector[sector_offset + i];
+            }
+            copied += chunk;
+            ++sector_index;
+            sector_offset = 0;
+        }
+        cluster_offset = 0;
+        if (copied < amount) {
+            uint32_t next;
+            if (!fat_get(cluster, &next) || next >= UINT32_C(0x0FFFFFF8) ||
+                ++traversed > kernel_fat.total_clusters) {
+                return 0;
+            }
+            cluster = next;
+        }
+    }
+    *read_size = copied;
+    return copied == amount;
+}
+
+int kernel_fat32_read_file(const char *path,
+                           void *buffer,
+                           size_t capacity,
+                           size_t *file_size)
+{
+    if (file_size == NULL || !kernel_fat32_file_size(path, file_size) ||
+        *file_size > capacity) {
+        return 0;
+    }
+    size_t read_size;
+    return kernel_fat32_read_range(path, 0, buffer, *file_size, &read_size) &&
+           read_size == *file_size;
 }
 
 int kernel_fat32_write_file(const char *path,

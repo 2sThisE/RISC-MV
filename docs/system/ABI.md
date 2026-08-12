@@ -106,10 +106,90 @@ PIC/GOT/PLT/TLS는 정의하지 않는다.
 
 ## syscall, 예외와 부팅 경계
 
+reference kernel의 첫 user thread 진입 ABI는 `R0=argc`, `R1=argv`,
+`R2=envp`다. 초기 SP는 16바이트 정렬이며 `[SP]`부터 64비트 `argc`, 연속된
+`argv` 포인터, NULL, 연속된 `envp` 포인터, NULL 순서로 놓인다. 문자열과
+포인터가 가리키는 저장소도 같은 초기 user stack 안에 있다. 추가 thread는
+동일한 startup table을 자동 상속하지 않으며 생성자가 별도로 진입 문맥을
+지정한다.
+
 권장 syscall ABI는 `R0=번호/반환값`, `R1`~`R6`=인자다. `SYSCALL` 명령은
 레지스터 의미를 해석하지 않으며 실제 서비스와 추가 보존 규칙은 게스트
 운영체제가 구현한다. 기본 규약에서는 syscall 뒤 `R0`~`R7`과 FLAGS가 바뀔
 수 있다.
+
+reference kernel이 현재 사용하는 초기 syscall 번호는 다음과 같다. 성공 시
+`R0`에는 0 또는 양의 결과가, 실패 시에는 음수 errno가 반환된다.
+공개 상수의 단일 기준은 `include/rarchm64_syscall.h`이며 ABI version은 1이다.
+
+| 번호 | 이름 | 인자 |
+|---:|---|---|
+| 0 | `exit` | `R1=status` |
+| 1 | `write` | `R1=fd`, `R2=buffer`, `R3=size` |
+| 2 | `read` | `R1=fd`, `R2=buffer`, `R3=size` |
+| 3 | `yield` | 없음 |
+| 4 | `getpid` | 없음 |
+| 5 | `wait` | `R1=status_address` |
+| 6 | `waitpid` | `R1=pid`, `R2=status_address` |
+| 7 | `join` | `R1=tid`, `R2=status_address` |
+| 8 | `open` | `R1=path`, `R2=flags` |
+| 9 | `close` | `R1=fd` |
+| 10 | `seek` | `R1=fd`, `R2=signed_offset`, `R3=whence` |
+| 11 | `fsync` | `R1=fd` |
+
+`open`의 flags bit 0은 read, bit 1은 write, bit 2는 append이며 최소 read 또는
+write 하나가 필요하다. append는 write와 함께 써야 하고 각 write 직전에 현재
+파일 끝으로 offset을 옮긴다. 서로 별도로 연 파일은 offset을 공유하지 않는다.
+read-only block 장치에서는 write-open을 거부한다. 현재는 존재하는 RMFS
+regular file만 열고 새 파일 생성 flag는 아직 없다. kernel 내부 전체 파일
+write API는 기존 디렉터리에 파일을 만들 수 있다. `seek`의
+whence 0/1/2는 각각 시작/현재 위치/파일 끝 기준이다. 경로는 NUL을 포함해
+최대 128바이트 안에서 끝나야 한다. 각 process에는 keyboard FD 0, UART FD 1/2가
+기본 설치되며 regular file은 가장 낮은 빈 FD 3 이상을 받는다.
+
+regular file의 `write`는 RMFS transaction group에 변경을 누적하며 `close`는
+암묵적으로 동기화하지 않는다. `fsync(fd)`가 성공하면 해당 시점까지 volume에
+누적된 data와 metadata가 block 장치에 기록되고 RMFS superblock이 CLEAN으로
+확정된다. 현재 구현은 파일별 journal이 아니라 volume 단위 group commit이다.
+
+`read`/`write`는 `buffer + size`의 uintptr overflow와 signed 반환 범위 초과를
+먼저 거부하고, 접근하는 모든 user page의 read 또는 write 권한을 검사한다.
+경로 복사도 매 바이트 주소 덧셈과 page 권한을 검사하며 NUL 없는 128바이트
+경로는 거부한다.
+
+안정된 errno 번호는 다음과 같다. syscall은 아래 양수 값을 음수로 바꿔
+반환한다.
+
+| 번호 | 이름 | 의미 |
+|---:|---|---|
+| 2 | `ENOENT` | 경로 없음 |
+| 5 | `EIO` | 장치/파일 I/O 실패 |
+| 9 | `EBADF` | 잘못된 FD |
+| 10 | `ECHILD` | 기다릴 자식 없음 |
+| 11 | `EAGAIN` | 지금 완료할 수 없음 |
+| 12 | `ENOMEM` | 메모리 부족 |
+| 13 | `EACCES` | 접근 mode 위반 |
+| 14 | `EFAULT` | 잘못된 user 주소 |
+| 16 | `EBUSY` | 이미 사용/대기 중 |
+| 22 | `EINVAL` | 잘못된 인자 |
+| 24 | `EMFILE` | process FD table 가득 참 |
+| 27 | `EFBIG` | 지원 파일/전송 크기 초과 |
+| 35 | `EDEADLK` | self-join 등 deadlock |
+| 38 | `ENOSYS` | 미구현 syscall |
+
+`wait`는 임의의 직접 자식을 기다리며 `waitpid`는 양의 PID의 직접 자식을
+기다린다. 성공하면 자식 PID를 반환하고, `status_address`가 0이 아니면 그곳에
+signed 64비트 exit status를 기록한다. 주소 0은 status를 버린다는 뜻이다.
+살아 있는 자식은 호출 thread를 `BLOCKED`로 전환하고 종료 시 깨운다. 현재
+옵션 인자는 없으며 `WNOHANG`과 process group 대기는 정의하지 않는다. 자식이
+없으면 `-ECHILD`, 잘못된 user 주소면 `-EFAULT`를 반환한다.
+
+`join`은 호출자와 같은 process의 다른 software thread가 종료할 때까지 기다린다.
+성공 시 대상 TID를 반환하고 선택적인 `status_address`에 signed 64비트 thread
+exit status를 기록한다. 대상은 한 번만 join할 수 있다. self-join은 `-EDEADLK`,
+이미 waiter가 있는 대상은 `-EBUSY`, 잘못되었거나 이미 수거된 TID는 `-EINVAL`을
+반환한다. 실행 가능한 다른 thread 없이 대기해야 하는 경우는 idle 경로가
+구현될 때까지 `-EAGAIN`이다.
 
 IRQ·동기 예외 핸들러는 일반 함수 ABI가 아니다. CPU 예외 프레임은 ISA
 문서를 따르며 `IRET` 대상의 레지스터가 필요하면 핸들러가 직접 보존한다.

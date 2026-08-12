@@ -1,6 +1,8 @@
 #include "disk_image.h"
 
 #include "boot_format.h"
+#include "rmfs_format.h"
+#include "rmfs_image.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -32,6 +34,11 @@
 const uint8_t CVM_BOOT_PARTITION_TYPE_GUID_BYTES[16] = {
     0x21, 0x3A, 0x7C, 0x9F, 0x52, 0x6D, 0xC8, 0x4B,
     0xA3, 0xE1, 0x43, 0x56, 0x4D, 0x42, 0x4F, 0x4F
+};
+
+const uint8_t RISC_MV_SYSTEM_PARTITION_TYPE_GUID_BYTES[16] = {
+    0xE4, 0xD7, 0x92, 0x3A, 0x2B, 0x1D, 0x68, 0x4C,
+    0x9A, 0x6F, 0x52, 0x49, 0x53, 0x43, 0x4D, 0x56
 };
 
 typedef struct {
@@ -267,20 +274,43 @@ static void make_protective_mbr(uint8_t sector[512], uint64_t total_sectors)
     sector[511] = 0xAA;
 }
 
+static void make_partition_entry(uint8_t *entry,
+                                 const uint8_t type_guid[16],
+                                 const uint8_t partition_guid[16],
+                                 uint64_t first_lba,
+                                 uint64_t last_lba,
+                                 const char *name)
+{
+    memcpy(entry, type_guid, 16);
+    memcpy(entry + 16, partition_guid, 16);
+    write_u64_le(entry + 32, first_lba);
+    write_u64_le(entry + 40, last_lba);
+    for (size_t i = 0; name[i] != '\0' && i < 36; ++i) {
+        write_u16_le(entry + 56 + i * 2, (uint16_t)(uint8_t)name[i]);
+    }
+}
+
 static void make_partition_entries(uint8_t entries[16384],
-                                   const uint8_t partition_guid[16],
-                                   uint64_t first_lba,
-                                   uint64_t last_lba)
+                                   const uint8_t boot_guid[16],
+                                   uint64_t boot_first_lba,
+                                   uint64_t boot_last_lba,
+                                   const uint8_t system_guid[16],
+                                   uint64_t system_first_lba,
+                                   uint64_t system_last_lba)
 {
     memset(entries, 0, 16384);
-    memcpy(entries, CVM_BOOT_PARTITION_TYPE_GUID_BYTES, 16);
-    memcpy(entries + 16, partition_guid, 16);
-    write_u64_le(entries + 32, first_lba);
-    write_u64_le(entries + 40, last_lba);
-    static const char name[] = "CVM Boot";
-    for (size_t i = 0; i < sizeof(name) - 1; ++i) {
-        write_u16_le(entries + 56 + i * 2, (uint16_t)(uint8_t)name[i]);
-    }
+    make_partition_entry(entries,
+                         CVM_BOOT_PARTITION_TYPE_GUID_BYTES,
+                         boot_guid,
+                         boot_first_lba,
+                         boot_last_lba,
+                         "RISC-MV Boot");
+    make_partition_entry(entries + CVM_GPT_PARTITION_ENTRY_SIZE,
+                         RISC_MV_SYSTEM_PARTITION_TYPE_GUID_BYTES,
+                         system_guid,
+                         system_first_lba,
+                         system_last_lba,
+                         "RISC-MV System");
 }
 
 static void make_gpt_header(uint8_t sector[512],
@@ -594,6 +624,8 @@ static CvmDiskStatus create_disk_contents(FILE *file,
                                           size_t bootloader_size,
                                           const uint8_t *kernel,
                                           size_t kernel_size,
+                                          const uint8_t *init,
+                                          size_t init_size,
                                           uint32_t create_flags,
                                           char *error,
                                           size_t error_size)
@@ -607,12 +639,22 @@ static CvmDiskStatus create_disk_contents(FILE *file,
         return disk_fail(CVM_DISK_BAD_SIZE,
                          error, error_size, "disk is too small for GPT layout");
     }
-    uint64_t partition_sectors = last_usable -
-                                 CVM_BOOT_PARTITION_START_LBA + 1;
+    uint64_t boot_first_lba = CVM_BOOT_PARTITION_START_LBA;
+    uint64_t boot_last_lba = boot_first_lba +
+                             CVM_BOOT_PARTITION_SECTORS - 1;
+    uint64_t system_first_lba = boot_last_lba + 1;
+    if (boot_last_lba >= last_usable ||
+        last_usable - system_first_lba + 1 <
+            RMFS_SECTORS_PER_BLOCK * UINT64_C(128)) {
+        return disk_fail(CVM_DISK_BAD_SIZE,
+                         error, error_size,
+                         "disk is too small for boot and RMFS partitions");
+    }
+    uint64_t system_sectors = last_usable - system_first_lba + 1;
 
     FatLayout fat_layout;
-    if (!calculate_fat_layout(CVM_BOOT_PARTITION_START_LBA,
-                              partition_sectors,
+    if (!calculate_fat_layout(boot_first_lba,
+                              CVM_BOOT_PARTITION_SECTORS,
                               bootloader_size,
                               kernel_size,
                               &fat_layout)) {
@@ -622,20 +664,27 @@ static CvmDiskStatus create_disk_contents(FILE *file,
     }
 
     uint8_t disk_guid[16];
-    uint8_t partition_guid[16];
+    uint8_t boot_partition_guid[16];
+    uint8_t system_partition_guid[16];
     if ((create_flags & CVM_DISK_CREATE_REPRODUCIBLE) != 0) {
         make_reproducible_guid(disk_guid,
                                bootloader,
                                bootloader_size,
                                disk_size,
                                UINT64_C(0x4449534B));
-        make_reproducible_guid(partition_guid,
+        make_reproducible_guid(boot_partition_guid,
                                kernel,
                                kernel_size,
                                disk_size,
                                UINT64_C(0x50415254));
+        make_reproducible_guid(system_partition_guid,
+                               init,
+                               init_size,
+                               disk_size,
+                               UINT64_C(0x524D4653));
     } else if (!make_random_guid(disk_guid) ||
-               !make_random_guid(partition_guid)) {
+               !make_random_guid(boot_partition_guid) ||
+               !make_random_guid(system_partition_guid)) {
         return disk_fail(CVM_DISK_IO_ERROR,
                          error, error_size,
                          "cannot obtain operating-system random bytes");
@@ -645,8 +694,11 @@ static CvmDiskStatus create_disk_contents(FILE *file,
     make_protective_mbr(mbr, total_sectors);
     uint8_t entries[16384];
     make_partition_entries(entries,
-                           partition_guid,
-                           CVM_BOOT_PARTITION_START_LBA,
+                           boot_partition_guid,
+                           boot_first_lba,
+                           boot_last_lba,
+                           system_partition_guid,
+                           system_first_lba,
                            last_usable);
     uint32_t entries_crc = cvm_crc32(entries, sizeof(entries));
     uint8_t primary_header[512];
@@ -681,6 +733,7 @@ static CvmDiskStatus create_disk_contents(FILE *file,
 
     uint32_t volume_id = cvm_crc32(bootloader, bootloader_size) ^
                          cvm_crc32(kernel, kernel_size) ^
+                         cvm_crc32(init, init_size) ^
                          (uint32_t)total_sectors;
     if (!write_fat32(file,
                      &fat_layout,
@@ -691,6 +744,19 @@ static CvmDiskStatus create_disk_contents(FILE *file,
                      volume_id)) {
         return disk_fail(CVM_DISK_IO_ERROR,
                          error, error_size, "cannot write FAT32 volume");
+    }
+    char rmfs_error[160];
+    if (!rmfs_image_format(file,
+                           system_first_lba,
+                           system_sectors,
+                           system_partition_guid,
+                           init,
+                           init_size,
+                           NULL,
+                           rmfs_error,
+                           sizeof(rmfs_error))) {
+        return disk_fail(CVM_DISK_IO_ERROR,
+                         error, error_size, rmfs_error);
     }
     return CVM_DISK_OK;
 }
@@ -847,6 +913,8 @@ CvmDiskStatus cvm_disk_image_create(const char *path,
                                      size_t bootloader_size,
                                      const uint8_t *kernel_image,
                                      size_t kernel_size,
+                                     const uint8_t *init_image,
+                                     size_t init_size,
                                      uint32_t create_flags,
                                      char *error,
                                      size_t error_size)
@@ -856,6 +924,7 @@ CvmDiskStatus cvm_disk_image_create(const char *path,
     }
     if (path == NULL || *path == '\0' || bootloader_image == NULL ||
         bootloader_size == 0 || kernel_image == NULL || kernel_size == 0 ||
+        init_image == NULL || init_size == 0 ||
         (create_flags & ~CVM_DISK_CREATE_REPRODUCIBLE) != 0) {
         return disk_fail(CVM_DISK_INVALID_ARGUMENT,
                          error, error_size, "invalid create arguments");
@@ -864,7 +933,7 @@ CvmDiskStatus cvm_disk_image_create(const char *path,
         disk_size % CVM_DISK_SECTOR_SIZE != 0) {
         return disk_fail(CVM_DISK_BAD_SIZE,
                          error, error_size,
-                         "disk size must be a 512-byte multiple from 64 MiB to 4 GiB");
+                         "disk size must be a 512-byte multiple from 64 MiB to 64 GiB");
     }
     char kernel_error[160];
     if (cvm_kernel_image_validate(bootloader_image,
@@ -881,6 +950,14 @@ CvmDiskStatus cvm_disk_image_create(const char *path,
                                   kernel_error,
                                   sizeof(kernel_error)) != CVM_BOOT_FORMAT_OK) {
         return disk_fail(CVM_DISK_BAD_KERNEL,
+                         error, error_size, kernel_error);
+    }
+    if (cvm_kernel_image_validate(init_image,
+                                  init_size,
+                                  NULL,
+                                  kernel_error,
+                                  sizeof(kernel_error)) != CVM_BOOT_FORMAT_OK) {
+        return disk_fail(CVM_DISK_BAD_INIT,
                          error, error_size, kernel_error);
     }
     if (path_exists(path)) {
@@ -901,6 +978,8 @@ CvmDiskStatus cvm_disk_image_create(const char *path,
                                                       bootloader_size,
                                                       kernel_image,
                                                       kernel_size,
+                                                      init_image,
+                                                      init_size,
                                                       create_flags,
                                                       error,
                                                       error_size)
@@ -1029,7 +1108,10 @@ CvmDiskStatus cvm_disk_image_inspect(const char *path,
 
     uint64_t partition_start = 0;
     uint64_t partition_last = 0;
+    uint64_t system_partition_start = 0;
+    uint64_t system_partition_last = 0;
     uint8_t partition_guid[16] = {0};
+    uint8_t system_partition_guid[16] = {0};
     for (uint32_t i = 0; i < CVM_GPT_PARTITION_ENTRY_COUNT; ++i) {
         const uint8_t *entry = entries +
                                (size_t)i * CVM_GPT_PARTITION_ENTRY_SIZE;
@@ -1037,7 +1119,12 @@ CvmDiskStatus cvm_disk_image_inspect(const char *path,
             partition_start = read_u64_le(entry + 32);
             partition_last = read_u64_le(entry + 40);
             memcpy(partition_guid, entry + 16, 16);
-            break;
+        } else if (memcmp(entry,
+                          RISC_MV_SYSTEM_PARTITION_TYPE_GUID_BYTES,
+                          16) == 0) {
+            system_partition_start = read_u64_le(entry + 32);
+            system_partition_last = read_u64_le(entry + 40);
+            memcpy(system_partition_guid, entry + 16, 16);
         }
     }
     free(entries);
@@ -1049,6 +1136,16 @@ CvmDiskStatus cvm_disk_image_inspect(const char *path,
         goto done;
     }
     uint64_t partition_sectors = partition_last - partition_start + 1;
+    if (system_partition_start <= partition_last ||
+        system_partition_last < system_partition_start ||
+        system_partition_last > read_u64_le(primary_header + 48)) {
+        status = disk_fail(CVM_DISK_BAD_GPT,
+                           error, error_size,
+                           "RISC-MV system partition is missing");
+        goto done;
+    }
+    uint64_t system_partition_sectors = system_partition_last -
+                                        system_partition_start + 1;
 
     uint8_t boot_sector[512];
     uint8_t backup_boot[512];
@@ -1160,7 +1257,8 @@ CvmDiskStatus cvm_disk_image_inspect(const char *path,
         free(directory);
         free(fat);
         status = disk_fail(CVM_DISK_KERNEL_NOT_FOUND,
-                           error, error_size, "BOOT directory is missing");
+                           error, error_size,
+                           "BOOT directory is missing");
         goto done;
     }
     uint32_t bootloader_cluster;
@@ -1219,13 +1317,45 @@ CvmDiskStatus cvm_disk_image_inspect(const char *path,
         goto done;
     }
 
+    RmfsImageInfo rmfs_info;
+    uint8_t *init_image = NULL;
+    size_t init_image_size = 0;
+    char rmfs_error[160];
+    if (!rmfs_image_inspect(file,
+                            system_partition_start,
+                            system_partition_sectors,
+                            &rmfs_info,
+                            &init_image,
+                            &init_image_size,
+                            rmfs_error,
+                            sizeof(rmfs_error))) {
+        status = disk_fail(CVM_DISK_BAD_RMFS,
+                           error, error_size, rmfs_error);
+        goto done;
+    }
+    char init_error[160];
+    if (cvm_kernel_image_validate(init_image,
+                                  init_image_size,
+                                  NULL,
+                                  init_error,
+                                  sizeof(init_error)) != CVM_BOOT_FORMAT_OK) {
+        free(init_image);
+        status = disk_fail(CVM_DISK_BAD_INIT,
+                           error, error_size, init_error);
+        goto done;
+    }
+    free(init_image);
+
     if (result != NULL) {
         memcpy(result->disk_guid, primary_header + 56, 16);
         memcpy(result->partition_guid, partition_guid, 16);
+        memcpy(result->system_partition_guid, system_partition_guid, 16);
         result->disk_size = disk_size;
         result->total_sectors = total_sectors;
         result->partition_start_lba = partition_start;
         result->partition_sectors = partition_sectors;
+        result->system_partition_start_lba = system_partition_start;
+        result->system_partition_sectors = system_partition_sectors;
         result->fat_sectors = layout.fat_sectors;
         result->sectors_per_cluster = layout.sectors_per_cluster;
         result->cluster_count = layout.cluster_count;
@@ -1233,6 +1363,14 @@ CvmDiskStatus cvm_disk_image_inspect(const char *path,
         result->bootloader_size = bootloader_size;
         result->kernel_first_cluster = kernel_cluster;
         result->kernel_size = kernel_size;
+        result->init_first_cluster = 0;
+        result->init_size = init_image_size;
+        result->rmfs_total_blocks = rmfs_info.total_blocks;
+        result->rmfs_free_blocks = rmfs_info.free_blocks;
+        result->rmfs_inode_count = rmfs_info.inode_count;
+        result->rmfs_free_inodes = rmfs_info.free_inodes;
+        result->init_inode = rmfs_info.init_inode;
+        result->init_first_block = rmfs_info.init_first_block;
     }
 
 done:
@@ -1258,12 +1396,18 @@ const char *cvm_disk_status_name(CvmDiskStatus status)
         return "bad bootloader";
     case CVM_DISK_BAD_KERNEL:
         return "bad kernel";
+    case CVM_DISK_BAD_INIT:
+        return "bad init";
     case CVM_DISK_BAD_GPT:
         return "bad GPT";
     case CVM_DISK_BAD_FAT32:
         return "bad FAT32";
+    case CVM_DISK_BAD_RMFS:
+        return "bad RMFS";
     case CVM_DISK_KERNEL_NOT_FOUND:
         return "kernel not found";
+    case CVM_DISK_INIT_NOT_FOUND:
+        return "init not found";
     case CVM_DISK_OUT_OF_MEMORY:
         return "out of memory";
     case CVM_DISK_IO_ERROR:

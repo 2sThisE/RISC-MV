@@ -29,6 +29,7 @@ static uintptr_t kernel_block_dma_physical;
 static uint8_t *kernel_block_dma_virtual;
 static uint64_t kernel_block_sector_capacity;
 static int kernel_block_is_read_only;
+static KernelSpinLock kernel_block_lock;
 static uintptr_t kernel_display_buffer_physical;
 static uint32_t *kernel_display_buffer_virtual;
 
@@ -148,12 +149,18 @@ int kernel_block_read(uint64_t lba, void *buffer, size_t sector_count)
     if (buffer == NULL || sector_count == 0 ||
         lba >= kernel_block_sector_capacity ||
         sector_count > kernel_block_sector_capacity - lba ||
-        !block_command(VM_BLOCK_COMMAND_READ, lba, sector_count)) {
+        sector_count > (size_t)(KERNEL_PAGE_SIZE / VM_BLOCK_SECTOR_SIZE)) {
+        return 0;
+    }
+    kernel_spin_lock(&kernel_block_lock);
+    if (!block_command(VM_BLOCK_COMMAND_READ, lba, sector_count)) {
+        kernel_spin_unlock(&kernel_block_lock);
         return 0;
     }
     size_t bytes = sector_count * (size_t)VM_BLOCK_SECTOR_SIZE;
     uint8_t *output = buffer;
     for (size_t i = 0; i < bytes; ++i) output[i] = kernel_block_dma_virtual[i];
+    kernel_spin_unlock(&kernel_block_lock);
     return 1;
 }
 
@@ -167,18 +174,24 @@ int kernel_block_write(uint64_t lba,
         sector_count > (size_t)(KERNEL_PAGE_SIZE / VM_BLOCK_SECTOR_SIZE)) {
         return 0;
     }
+    kernel_spin_lock(&kernel_block_lock);
     size_t bytes = sector_count * (size_t)VM_BLOCK_SECTOR_SIZE;
     const uint8_t *input = buffer;
     for (size_t i = 0; i < bytes; ++i) kernel_block_dma_virtual[i] = input[i];
-    return block_command(VM_BLOCK_COMMAND_WRITE, lba, sector_count);
+    int okay = block_command(VM_BLOCK_COMMAND_WRITE, lba, sector_count);
+    kernel_spin_unlock(&kernel_block_lock);
+    return okay;
 }
 
 int kernel_block_flush(void)
 {
     if (kernel_block_device == NULL) return 0;
+    kernel_spin_lock(&kernel_block_lock);
     cvm_mmio_write64(kernel_block_device->bar + VM_BLOCK_COMMAND_OFFSET,
                      VM_BLOCK_COMMAND_FLUSH);
-    return block_wait();
+    int okay = block_wait();
+    kernel_spin_unlock(&kernel_block_lock);
+    return okay;
 }
 
 uint64_t kernel_block_capacity(void)
@@ -237,6 +250,7 @@ int kernel_display_present_test_pattern(void)
 
 int kernel_devices_init(void)
 {
+    kernel_spin_init(&kernel_block_lock);
     for (size_t i = 0; i < KERNEL_DEVICE_SLOT_COUNT; ++i) {
         kernel_devices[i].present = 0;
     }

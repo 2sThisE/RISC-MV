@@ -285,6 +285,7 @@ function Build-DiskImageTool {
         '-I', (Join-Path $ProjectRoot 'include'),
         (Join-Path $ProjectRoot 'tools\disk_image\main.c'),
         (Join-Path $ProjectRoot 'src\disk_image.c'),
+        (Join-Path $ProjectRoot 'src\rmfs_image.c'),
         (Join-Path $ProjectRoot 'src\boot_format.c'),
         '-o', (Join-Path $output 'vmkdisk.exe')
     )
@@ -392,7 +393,7 @@ function Build-Kernel {
     foreach ($sourceName in @('kernel_main.c', 'pmm.c', 'mmu.c', 'heap.c',
                                'runtime.c', 'address_space.c', 'user_loader.c',
                                'process.c',
-                               'devices.c', 'fat32.c', 'vfs.c',
+                               'devices.c', 'fat32.c', 'rmfs.c', 'vfs.c',
                                'syscall.c', 'scheduler.c', 'exception.c')) {
         $objectName = [System.IO.Path]::ChangeExtension($sourceName, '.o')
         $objectPath = Join-Path $output $objectName
@@ -430,12 +431,13 @@ function Build-Kernel {
         (Join-Path $output 'kernel.exf')).Length
     $minimumStagingSize = [uint64]([Math]::Ceiling(
         $kernelImageSize / 4096.0) * 4096)
-    if ($minimumStagingSize -gt 0xD0000) {
-        throw ('kernel link: page-rounded image file size 0x{0:X} leaves no staging space above kernel base 0x30000 in the 1 MiB minimum RAM profile' -f `
+    $minimumBootRam = [uint64]0x200000
+    if ($minimumStagingSize -gt $minimumBootRam - 0x30000) {
+        throw ('kernel link: page-rounded image file size 0x{0:X} leaves no staging space above kernel base 0x30000 in the 2 MiB minimum boot profile' -f `
             $minimumStagingSize)
     }
     $kernelSpan = $kernelEnd - [uint64]0x40000000
-    $minimumStagingStart = [uint64](0x100000 - $minimumStagingSize)
+    $minimumStagingStart = [uint64]($minimumBootRam - $minimumStagingSize)
     $kernelPhysicalSpan = [uint64]([Math]::Ceiling(
         $kernelSpan / 4096.0) * 4096)
     $kernelLevel0Tables = [uint64][Math]::Ceiling(
@@ -589,6 +591,15 @@ function Build-BootExample {
         --load 0x30000 --entry 0x30000 --memory-size 0x1000
     Assert-LastExitCode 'kernel stub packaging'
 
+    & $assembler (Join-Path $ProjectRoot 'examples\boot\init.asm') `
+        -o (Join-Path $output 'init.bin') --base 0x1000000 `
+        --symbols (Join-Path $symbolOutput 'init.sym')
+    Assert-LastExitCode 'init assembly'
+    & $imageTool pack (Join-Path $output 'init.bin') `
+        -o (Join-Path $output 'init.exf') `
+        --load 0x1000000 --entry 0x1000000 --memory-size 0x1000
+    Assert-LastExitCode 'init packaging'
+
     $diskPath = Join-Path $output 'system.img'
     if (Test-Path -LiteralPath $diskPath) {
         Remove-Item -LiteralPath $diskPath -Force
@@ -596,6 +607,7 @@ function Build-BootExample {
     & $diskTool create -o $diskPath --size 64M `
         --bootloader (Join-Path $output 'bootloader.exf') `
         --kernel (Join-Path $BuildRoot 'kernel\kernel.exf') `
+        --init (Join-Path $output 'init.exf') `
         --reproducible
     Assert-LastExitCode 'boot disk generation'
     if (Test-Path -LiteralPath (Join-Path $BuildRoot 'modules\block_device.dll')) {
@@ -636,7 +648,8 @@ function Build-Tests {
     $productionSources = @(
         'src\boot_format.c', 'src\bus.c', 'src\core_control.c',
         'src\cpu.c', 'src\cpu_vector.c', 'src\device_manager.c',
-        'src\disk_image.c', 'src\display_queue.c', 'src\host_thread.c',
+        'src\disk_image.c', 'src\rmfs_image.c',
+        'src\display_queue.c', 'src\host_thread.c',
         'src\headless_display.c', 'src\interrupt.c',
         'src\irq_controller.c', 'src\keyboard_input.c',
         'src\main_options.c', 'src\mmu.c', 'src\module_loader.c',

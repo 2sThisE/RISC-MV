@@ -194,8 +194,8 @@ int kernel_bootstrap_mmu(void)
                          KERNEL_PTE_VALID | KERNEL_PTE_READ |
                          KERNEL_PTE_WRITE) != 0 ||
         map_kernel_range(kernel_ptbr,
-                         kernel_stack_bottom,
-                         kernel_stack_top,
+                         kernel_bss_start,
+                         kernel_bss_end,
                          KERNEL_PTE_VALID | KERNEL_PTE_READ |
                          KERNEL_PTE_WRITE) != 0 ||
         map_range(kernel_ptbr,

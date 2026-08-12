@@ -110,7 +110,7 @@ GPT/FAT32 부팅 디스크까지 만들려면 다음 예제를 실행한다.
 ```
 
 전체 예제는 다음 한 줄로 빌드하고 실행한다. 현재 v1 ROM은 고정 작업
-영역과 staging buffer 때문에 최소 1 MiB RAM이 필요하다.
+영역, 확장된 reference kernel과 staging buffer 때문에 최소 2 MiB RAM이 필요하다.
 
 ```powershell
 .\examples\boot\run_boot_demo.ps1
@@ -129,9 +129,9 @@ initial_pt_end..staging_start  usable RAM
 staging_start..RAM_END  page-rounded KERNEL.EXF staging
 ```
 
-정상 부팅에서는 다음 주요 성공 마커가 순서대로 출력된다. 3개 process의 4개
-user thread syscall 출력이 중간에 추가되며 실제 출력 순서는 선점 시점에 따라
-달라질 수 있다.
+정상 부팅에서는 다음 주요 성공 마커가 순서대로 출력된다. 디스크의
+`/BIN/INIT.EXF`가 PID 1로 실행되며 총 2개 process와 3개 user thread의 출력
+순서는 선점 시점에 따라 달라질 수 있다.
 
 ```text
 RISC-MV ROM: start
@@ -144,7 +144,7 @@ KERNEL: MMU ON
 KERNEL: HEAP OK
 KERNEL: STRUCTURES OK
 KERNEL: DEVICES OK
-KERNEL: VFS FAT32 RW OK
+KERNEL: VFS RMFS RW OK
 KERNEL: USER ADDRESS SPACE OK
 KERNEL: VBR OK
 KERNEL: SYSCALL DISPATCH OK
@@ -154,8 +154,12 @@ KERNEL: NX PROTECT OK
 KERNEL: MEMORY PROTECTION OK
 KERNEL: PAGE FAULT RECOVERED
 KERNEL: USER TASKS START
+INIT: FILE/WAIT/JOIN OK
+KERNEL: /BIN/INIT.EXF PID 1 OK
 KERNEL: USER FAULT ISOLATED
 KERNEL: PROCESS REAP OK
+KERNEL: WAITPID BLOCK/WAKE OK
+KERNEL: THREAD JOIN OK
 KERNEL: PROCESS THREAD OK
 KERNEL: USER SYSCALL OK
 KERNEL: PREEMPTIVE SCHEDULER OK
@@ -165,9 +169,9 @@ KERNEL: READY
 Firmware Table과 서비스 규격은 [FIRMWARE_ABI.md](FIRMWARE_ABI.md)에 있다.
 `kernel` 폴더의 C reference kernel은 `0x40000000` 고정 가상주소에서 이미
 MMU가 켜진 상태로 시작한다. BootInfo의 USABLE 메모리와
-`0x100000000 + physical` direct-map으로 free-list PMM을 만들고, 자체 최종
+`0x100000000 + physical` direct-map으로 범위 기반 지연 PMM을 만들고, 자체 최종
 페이지 테이블로 교체한 뒤 초기 PT 페이지를 회수한다. 커널 text=RX,
-rodata=R, data/stack=RW이고 direct-map은 RW/NX다.
+rodata=R, data/BSS/stack=RW이고 direct-map은 RW/NX다.
 이후 물리 RAM에 77-entry VBR 테이블을 만들고 동기 예외를
 공통 kernel panic에 연결한다. 부팅 자체 검사는 일부러 미매핑 가상주소를
 읽어 `LOAD_PAGE_FAULT`를 발생시키며, 전용 핸들러가 페이지를 매핑하고

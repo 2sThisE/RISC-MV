@@ -1,6 +1,6 @@
 # RISC-MV 부팅 디스크 도구 (`vmkdisk`)
 
-`vmkdisk`는 검증된 RISC-MV `kernel.exf`를 포함하는 GPT/FAT32 raw 디스크 이미지를
+`vmkdisk`는 검증된 RISC-MV 실행 이미지를 포함하는 GPT raw 디스크 이미지를
 호스트에서 생성한다. 출력 이미지는 기존 block device 모듈의 backing
 파일로 바로 사용할 수 있다.
 
@@ -17,10 +17,11 @@
     -o .\custom-system.img `
     --size 64M `
     --bootloader .\build\examples\bootloader.exf `
-    --kernel .\build\kernel\kernel.exf
+    --kernel .\build\kernel\kernel.exf `
+    --init .\build\examples\init.exf
 ```
 
-크기는 512바이트 배수여야 하며 현재 v1은 64 MiB부터 4 GiB까지 받는다.
+크기는 512바이트 배수여야 하며 현재 v1은 64 MiB부터 64 GiB까지 받는다.
 `K`, `M`, `G` 접미사는 1024 단위다. 이미 존재하는 출력은 덮어쓰지 않고
 오류를 반환한다.
 
@@ -31,10 +32,12 @@
 
 - Protective MBR
 - Primary/Backup GPT header 및 128개 partition entry와 CRC32
-- 레거시 CVM Boot Partition Type GUID
+- 40 MiB FAT32 boot partition과 RISC-MV system partition GPT entry
 - FAT32 VBR, backup VBR, FSInfo와 두 개의 동일한 FAT
-- `/BOOT/BOOT.EXF`와 `/BOOT/KERNEL.EXF`
-- 두 실행 이미지의 header/payload CRC32와 세그먼트 규격
+- FAT32의 `/BOOT/BOOT.EXF`, `/BOOT/KERNEL.EXF`
+- RMFS v1 superblock/backup, inode·block bitmap, inode table
+- RMFS의 `/BIN/INIT.EXF`
+- 세 실행 이미지의 header/payload CRC32와 세그먼트 규격
 
 ## 검사
 
@@ -43,4 +46,6 @@
 ```
 
 손상된 MBR/GPT CRC, primary/backup 불일치, FAT geometry·cluster chain,
-누락되거나 손상된 `BOOT.EXF`, `KERNEL.EXF`를 거부한다.
+RMFS superblock/inode/directory CRC, 누락되거나 손상된 `BOOT.EXF`,
+`KERNEL.EXF`, `INIT.EXF`를 거부한다. 상세 RMFS 규격은
+[RMFS.md](../system/RMFS.md)에 있다.

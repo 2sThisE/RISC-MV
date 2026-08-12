@@ -42,6 +42,9 @@ typedef struct {
 #define KERNEL_THREAD_KERNEL_STACK_SIZE ((size_t)0x00004000)
 
 typedef struct KernelAddressSpace KernelAddressSpace;
+typedef struct KernelVnode KernelVnode;
+typedef struct KernelOpenFile KernelOpenFile;
+typedef struct KernelFdTable KernelFdTable;
 
 typedef struct {
     KernelAddressSpace *address_space;
@@ -72,9 +75,11 @@ typedef struct KernelThread KernelThread;
 struct KernelProcess {
     KernelListNode scheduler_node;
     KernelListNode reap_node;
+    KernelListNode child_node;
     KernelList threads;
+    KernelList children;
     KernelProcess *parent;
-    void *fd_table;
+    KernelFdTable *fd_table;
     KernelUserImage image;
     uint64_t pid;
     uint64_t next_stack_slot;
@@ -86,12 +91,14 @@ struct KernelProcess {
     uint64_t fault_info;
     KernelProcessState state;
     int faulted;
+    int registered;
     int reap_queued;
 };
 
 struct KernelThread {
     KernelListNode process_node;
     KernelListNode run_node;
+    KernelListNode reap_node;
     KernelProcess *process;
     uint64_t registers[15];
     uint64_t pc;
@@ -99,11 +106,19 @@ struct KernelThread {
     uint64_t stack_pointer;
     uint8_t *kernel_stack;
     uintptr_t kernel_stack_top;
+    uintptr_t user_stack_bottom;
+    uintptr_t user_stack_top;
     uint64_t tid;
     int64_t exit_status;
     uint64_t write_count;
+    uint64_t wait_pid;
+    uintptr_t wait_status_address;
+    uint64_t wait_tid;
+    uintptr_t join_status_address;
+    KernelThread *join_waiter;
     KernelThreadState state;
     int queued;
+    int reap_queued;
 };
 
 void kernel_spin_init(KernelSpinLock *lock);
@@ -138,6 +153,9 @@ int kernel_address_space_map_anonymous(KernelAddressSpace *space,
                                        uintptr_t virtual_address,
                                        uint64_t flags,
                                        uintptr_t *physical_address);
+int kernel_address_space_unmap_range(KernelAddressSpace *space,
+                                     uintptr_t virtual_address,
+                                     size_t size);
 int kernel_address_space_resolve(const KernelAddressSpace *space,
                                  uintptr_t virtual_address,
                                  uint64_t required_flags,
@@ -146,16 +164,28 @@ int kernel_address_space_resolve(const KernelAddressSpace *space,
 int kernel_user_image_load(const uint8_t *data,
                            size_t size,
                            KernelUserImage *image);
+int kernel_user_image_load_path(const char *path,
+                                size_t maximum_size,
+                                KernelUserImage *image);
 void kernel_user_image_destroy(KernelUserImage *image);
 int kernel_user_loader_self_test(void);
-uint8_t *kernel_user_test_program_create(const char *message,
-                                         uint32_t loop_count,
-                                         size_t *size);
 uint8_t *kernel_user_fault_test_program_create(size_t *size);
 
 void kernel_process_system_init(void);
 KernelProcess *kernel_process_create(const uint8_t *data, size_t size);
+KernelProcess *kernel_process_create_child(KernelProcess *parent,
+                                           const uint8_t *data,
+                                           size_t size);
+KernelProcess *kernel_process_create_path(const char *path,
+                                          size_t maximum_size);
 void kernel_process_destroy(KernelProcess *process);
 KernelThread *kernel_thread_create(KernelProcess *process);
+int kernel_thread_set_startup(KernelThread *thread,
+                              size_t argument_count,
+                              const char *const *arguments,
+                              size_t environment_count,
+                              const char *const *environment);
+int kernel_thread_destroy(KernelThread *thread);
+int kernel_process_lifetime_self_test(void);
 
 #endif

@@ -295,6 +295,24 @@ int kernel_user_image_load(const uint8_t *data,
     return 0;
 }
 
+int kernel_user_image_load_path(const char *path,
+                                size_t maximum_size,
+                                KernelUserImage *image)
+{
+    if (image == NULL) return 1;
+    image->address_space = NULL;
+    image->entry = 0;
+    image->stack_pointer = 0;
+    image->image_base = 0;
+    image->image_end = 0;
+    uint8_t *data;
+    size_t size;
+    if (!kernel_vfs_read_all(path, maximum_size, &data, &size)) return 1;
+    int result = kernel_user_image_load(data, size, image);
+    kernel_free(data);
+    return result;
+}
+
 void kernel_user_image_destroy(KernelUserImage *image)
 {
     if (image == NULL) return;
@@ -354,6 +372,49 @@ static uint8_t *user_make_test_image(size_t *size)
         data[CVM_KERNEL_HEADER_SIZE + CVM_KERNEL_SEGMENT_SIZE + i] =
             (uint8_t)(0x80 + i);
     }
+    user_finalize_test_image(data, *size);
+    return data;
+}
+
+static uint8_t *user_make_overlap_test_image(size_t *size)
+{
+    *size = CVM_KERNEL_HEADER_SIZE + 2 * CVM_KERNEL_SEGMENT_SIZE + 16;
+    uint8_t *data = kernel_calloc(1, *size);
+    if (data == NULL) return NULL;
+    static const uint8_t magic[8] = RISC_MV_EXF_MAGIC;
+    for (size_t i = 0; i < 8; ++i) data[i] = magic[i];
+    user_write_u16(data + 0x08, CVM_KERNEL_FORMAT_MAJOR);
+    user_write_u16(data + 0x0A, CVM_KERNEL_FORMAT_MINOR);
+    user_write_u32(data + 0x0C, CVM_KERNEL_HEADER_SIZE);
+    user_write_u32(data + 0x18, RARCH_M64_ISA_ID);
+    user_write_u32(data + 0x1C, CVM_ISA_VERSION);
+    data[0x20] = CVM_ADDRESS_BITS;
+    data[0x21] = CVM_BYTE_ORDER_LITTLE;
+    user_write_u16(data + 0x22, 2);
+    user_write_u32(data + 0x24, CVM_KERNEL_SEGMENT_SIZE);
+    user_write_u64(data + 0x28, CVM_KERNEL_HEADER_SIZE);
+    user_write_u64(data + 0x30, KERNEL_USER_IMAGE_BASE);
+    user_write_u64(data + 0x38, *size);
+
+    uint8_t *first = data + CVM_KERNEL_HEADER_SIZE;
+    user_write_u32(first + 0x00, CVM_SEGMENT_LOAD);
+    user_write_u32(first + 0x04,
+                   CVM_SEGMENT_READ | CVM_SEGMENT_EXECUTE);
+    user_write_u64(first + 0x08,
+                   CVM_KERNEL_HEADER_SIZE + 2 * CVM_KERNEL_SEGMENT_SIZE);
+    user_write_u64(first + 0x10, KERNEL_USER_IMAGE_BASE);
+    user_write_u64(first + 0x18, KERNEL_USER_IMAGE_BASE);
+    user_write_u64(first + 0x20, 16);
+    user_write_u64(first + 0x28, KERNEL_PAGE_SIZE);
+    user_write_u64(first + 0x30, KERNEL_PAGE_SIZE);
+
+    uint8_t *second = first + CVM_KERNEL_SEGMENT_SIZE;
+    user_write_u32(second + 0x00, CVM_SEGMENT_LOAD);
+    user_write_u32(second + 0x04, CVM_SEGMENT_READ);
+    user_write_u64(second + 0x10, KERNEL_USER_IMAGE_BASE);
+    user_write_u64(second + 0x18, KERNEL_USER_IMAGE_BASE);
+    user_write_u64(second + 0x28, KERNEL_PAGE_SIZE);
+    user_write_u64(second + 0x30, KERNEL_PAGE_SIZE);
     user_finalize_test_image(data, *size);
     return data;
 }
@@ -431,6 +492,8 @@ static uint8_t *user_wrap_test_program(const uint8_t *code,
     return data;
 }
 
+#if 0
+/* Replaced by the packaged init EXF in process lifetime tests. */
 uint8_t *kernel_user_test_program_create(const char *message,
                                          uint32_t loop_count,
                                          size_t *size)
@@ -475,6 +538,7 @@ uint8_t *kernel_user_test_program_create(const char *message,
 
     return user_wrap_test_program(code, cursor, size);
 }
+#endif
 
 uint8_t *kernel_user_fault_test_program_create(size_t *size)
 {
@@ -489,6 +553,191 @@ uint8_t *kernel_user_fault_test_program_create(size_t *size)
     return user_wrap_test_program(code, cursor, size);
 }
 
+#if 0
+/* Superseded by /BIN/INIT.EXF. Kept as source-only reference so the old
+   generated test ISA sequence does not consume the minimum-RAM kernel image. */
+uint8_t *kernel_user_wait_test_program_create(const char *message,
+                                              size_t *size)
+{
+    if (message == NULL || size == NULL) return NULL;
+    size_t message_size = 0;
+    while (message[message_size] != '\0') {
+        if (message_size == 255) return NULL;
+        ++message_size;
+    }
+
+    uint8_t code[256];
+    size_t cursor = 0;
+    code[cursor++] = OP_MOV;
+    code[cursor++] = 2;
+    code[cursor++] = REGISTER_SP;
+    code[cursor++] = OP_ADDI32;
+    code[cursor++] = 2;
+    user_emit_u32(code, &cursor, (uint32_t)-8);
+    user_emit_movi32(code, &cursor, 0, 6); /* SYS_WAITPID */
+    code[cursor++] = OP_SYSCALL;
+
+    code[cursor++] = OP_CMP;
+    code[cursor++] = 0;
+    code[cursor++] = 1;
+    code[cursor++] = OP_JNZ;
+    size_t pid_failure_target = cursor;
+    user_emit_u64(code, &cursor, 0);
+    code[cursor++] = OP_LOAD64;
+    code[cursor++] = 4;
+    code[cursor++] = 2;
+    code[cursor++] = OP_CMP;
+    code[cursor++] = 4;
+    code[cursor++] = 3;
+    code[cursor++] = OP_JNZ;
+    size_t status_failure_target = cursor;
+    user_emit_u64(code, &cursor, 0);
+
+    user_emit_movi32(code, &cursor, 0, 1); /* SYS_WRITE */
+    user_emit_movi32(code, &cursor, 1, 1); /* stdout */
+    size_t message_pointer = cursor + 2;
+    user_emit_movi64(code, &cursor, 2, 0);
+    user_emit_movi32(code, &cursor, 3, (uint32_t)message_size);
+    code[cursor++] = OP_SYSCALL;
+    user_emit_movi32(code, &cursor, 0, 0); /* SYS_EXIT */
+    user_emit_movi32(code, &cursor, 1, 0);
+    code[cursor++] = OP_SYSCALL;
+    code[cursor++] = OP_HALT;
+
+    uint64_t failure_address = KERNEL_USER_IMAGE_BASE + cursor;
+    user_write_u64(code + pid_failure_target, failure_address);
+    user_write_u64(code + status_failure_target, failure_address);
+    user_emit_movi32(code, &cursor, 0, 0); /* SYS_EXIT */
+    user_emit_movi32(code, &cursor, 1, 1);
+    code[cursor++] = OP_SYSCALL;
+    code[cursor++] = OP_HALT;
+
+    size_t message_offset = cursor;
+    if (cursor + message_size > sizeof(code)) return NULL;
+    for (size_t i = 0; i < message_size; ++i) code[cursor++] = message[i];
+    user_write_u64(code + message_pointer,
+                   KERNEL_USER_IMAGE_BASE + message_offset);
+    return user_wrap_test_program(code, cursor, size);
+}
+
+uint8_t *kernel_user_join_test_program_create(const char *message,
+                                              uint32_t loop_count,
+                                              size_t *size)
+{
+    if (message == NULL || size == NULL || loop_count == 0) return NULL;
+    size_t message_size = 0;
+    while (message[message_size] != '\0') {
+        if (message_size == 255) return NULL;
+        ++message_size;
+    }
+
+    uint8_t code[256];
+    size_t cursor = 0;
+    code[cursor++] = OP_MOV;
+    code[cursor++] = 5;
+    code[cursor++] = 0;
+    code[cursor++] = OP_CMPI32;
+    code[cursor++] = 1;
+    user_emit_u32(code, &cursor, 0);
+    code[cursor++] = OP_JNZ;
+    size_t join_target = cursor;
+    user_emit_u64(code, &cursor, 0);
+
+    user_emit_movi32(code, &cursor, 0, 3); /* SYS_YIELD */
+    code[cursor++] = OP_SYSCALL;
+    user_emit_movi32(code, &cursor, 8, loop_count);
+    uint64_t loop_address = KERNEL_USER_IMAGE_BASE + cursor;
+    code[cursor++] = OP_ADDI32;
+    code[cursor++] = 8;
+    user_emit_u32(code, &cursor, UINT32_MAX);
+    code[cursor++] = OP_CMPI32;
+    code[cursor++] = 8;
+    user_emit_u32(code, &cursor, 0);
+    code[cursor++] = OP_JNZ;
+    user_emit_u64(code, &cursor, loop_address);
+    user_emit_movi32(code, &cursor, 0, 0); /* SYS_EXIT */
+    user_emit_movi32(code, &cursor, 1, 0);
+    code[cursor++] = OP_SYSCALL;
+    code[cursor++] = OP_HALT;
+
+    user_write_u64(code + join_target, KERNEL_USER_IMAGE_BASE + cursor);
+    code[cursor++] = OP_MOV;
+    code[cursor++] = 2;
+    code[cursor++] = REGISTER_SP;
+    code[cursor++] = OP_ADDI32;
+    code[cursor++] = 2;
+    user_emit_u32(code, &cursor, (uint32_t)-8);
+
+    user_emit_movi32(code, &cursor, 0, 6); /* SYS_WAITPID */
+    code[cursor++] = OP_SYSCALL;
+    code[cursor++] = OP_CMP;
+    code[cursor++] = 0;
+    code[cursor++] = 1;
+    code[cursor++] = OP_JNZ;
+    size_t wait_pid_failure_target = cursor;
+    user_emit_u64(code, &cursor, 0);
+    code[cursor++] = OP_LOAD64;
+    code[cursor++] = 4;
+    code[cursor++] = 2;
+    code[cursor++] = OP_CMP;
+    code[cursor++] = 4;
+    code[cursor++] = 3;
+    code[cursor++] = OP_JNZ;
+    size_t wait_status_failure_target = cursor;
+    user_emit_u64(code, &cursor, 0);
+
+    code[cursor++] = OP_MOV;
+    code[cursor++] = 1;
+    code[cursor++] = 5;
+    user_emit_movi32(code, &cursor, 3, 0);
+    user_emit_movi32(code, &cursor, 0, 7); /* SYS_JOIN */
+    code[cursor++] = OP_SYSCALL;
+    code[cursor++] = OP_CMP;
+    code[cursor++] = 0;
+    code[cursor++] = 1;
+    code[cursor++] = OP_JNZ;
+    size_t tid_failure_target = cursor;
+    user_emit_u64(code, &cursor, 0);
+    code[cursor++] = OP_LOAD64;
+    code[cursor++] = 4;
+    code[cursor++] = 2;
+    code[cursor++] = OP_CMP;
+    code[cursor++] = 4;
+    code[cursor++] = 3;
+    code[cursor++] = OP_JNZ;
+    size_t status_failure_target = cursor;
+    user_emit_u64(code, &cursor, 0);
+
+    user_emit_movi32(code, &cursor, 0, 1); /* SYS_WRITE */
+    user_emit_movi32(code, &cursor, 1, 1);
+    size_t message_pointer = cursor + 2;
+    user_emit_movi64(code, &cursor, 2, 0);
+    user_emit_movi32(code, &cursor, 3, (uint32_t)message_size);
+    code[cursor++] = OP_SYSCALL;
+    user_emit_movi32(code, &cursor, 0, 0); /* SYS_EXIT */
+    user_emit_movi32(code, &cursor, 1, 0);
+    code[cursor++] = OP_SYSCALL;
+    code[cursor++] = OP_HALT;
+
+    uint64_t failure_address = KERNEL_USER_IMAGE_BASE + cursor;
+    user_write_u64(code + wait_pid_failure_target, failure_address);
+    user_write_u64(code + wait_status_failure_target, failure_address);
+    user_write_u64(code + tid_failure_target, failure_address);
+    user_write_u64(code + status_failure_target, failure_address);
+    user_emit_movi32(code, &cursor, 0, 0); /* SYS_EXIT */
+    user_emit_movi32(code, &cursor, 1, 1);
+    code[cursor++] = OP_SYSCALL;
+    code[cursor++] = OP_HALT;
+
+    size_t message_offset = cursor;
+    if (cursor + message_size > sizeof(code)) return NULL;
+    for (size_t i = 0; i < message_size; ++i) code[cursor++] = message[i];
+    user_write_u64(code + message_pointer,
+                   KERNEL_USER_IMAGE_BASE + message_offset);
+    return user_wrap_test_program(code, cursor, size);
+}
+#endif
+
 int kernel_user_loader_self_test(void)
 {
     size_t size;
@@ -501,6 +750,12 @@ int kernel_user_loader_self_test(void)
     data[size - 1] ^= 1;
 
     uint8_t *segment = data + CVM_KERNEL_HEADER_SIZE;
+    user_write_u32(data + 0x18, RARCH_M64_ISA_ID ^ UINT32_C(1));
+    user_finalize_test_image(data, size);
+    if (kernel_user_image_load(data, size, &image) == 0) return 1;
+    user_write_u32(data + 0x18, RARCH_M64_ISA_ID);
+    user_finalize_test_image(data, size);
+
     user_write_u32(segment + 0x04,
                    CVM_SEGMENT_READ | CVM_SEGMENT_WRITE |
                        CVM_SEGMENT_EXECUTE);
@@ -509,6 +764,15 @@ int kernel_user_loader_self_test(void)
     user_write_u32(segment + 0x04,
                    CVM_SEGMENT_READ | CVM_SEGMENT_EXECUTE);
     user_finalize_test_image(data, size);
+
+    size_t overlap_size;
+    uint8_t *overlap = user_make_overlap_test_image(&overlap_size);
+    if (overlap == NULL ||
+        kernel_user_image_load(overlap, overlap_size, &image) == 0) {
+        kernel_free(overlap);
+        return 1;
+    }
+    kernel_free(overlap);
 
     if (kernel_user_image_load(data, size, &image) != 0 ||
         image.entry != (uintptr_t)KERNEL_USER_IMAGE_BASE ||

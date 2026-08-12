@@ -1,7 +1,7 @@
 ; RISC-MV Boot ROM v1.
 ;
 ; Reset address: 0x0000007FFFF00000
-; Required RAM: 1 MiB or more
+; Required RAM: 2 MiB or more
 ; Disk path: VIO storage -> GPT -> RISC-MV Boot partition -> FAT32
 ; Second-stage path: /BOOT/BOOT.EXF
 ;
@@ -32,7 +32,7 @@ boot:
     LOAD64O R1, R0, 0x20
     MOVI32U R2, 0x1000
     STORE64O R2, R1, 0x10
-    MOVI32U R3, 0x100000
+    MOVI32U R3, 0x200000
     CMP R1, R3
     BRCC LTU, error_ram
     LOAD64O R1, R0, 0x10
@@ -1559,7 +1559,7 @@ message_start:
 message_handoff:
     .asciz "RISC-MV ROM: bootloader\n"
 message_ram:
-    .asciz "RISC-MV ROM E01: RAM requires 1 MiB\n"
+    .asciz "RISC-MV ROM E01: RAM requires 2 MiB\n"
 message_device:
     .asciz "RISC-MV ROM E02: no VIO block device\n"
 message_gpt:

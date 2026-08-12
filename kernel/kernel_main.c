@@ -162,15 +162,19 @@ int kernel_main(CvmBootInfo *info, uint64_t handoff_magic,
     }
     kernel_uart_puts("KERNEL: DEVICES OK\n");
 
-    if (kernel_vfs_init() != 0 || kernel_vfs_self_test() != 0) {
-        return fail("KERNEL ERROR: VFS\n");
-    }
-    kernel_uart_puts("KERNEL: VFS FAT32 RW OK\n");
+    if (kernel_vfs_init() != 0) return fail("KERNEL ERROR: VFS MOUNT\n");
+    if (kernel_vfs_self_test() != 0) return fail("KERNEL ERROR: VFS TEST\n");
+    kernel_uart_puts("KERNEL: VFS RMFS RW OK\n");
 
     if (kernel_user_loader_self_test() != 0) {
         return fail("KERNEL ERROR: user loader\n");
     }
     kernel_uart_puts("KERNEL: USER ADDRESS SPACE OK\n");
+
+    if (kernel_process_lifetime_self_test() != 0) {
+        return fail("KERNEL ERROR: process lifetime\n");
+    }
+    kernel_uart_puts("KERNEL: PROCESS LIFETIME OK\n");
 
     if (kernel_exception_init() != 0) {
         return fail("KERNEL ERROR: exception init\n");

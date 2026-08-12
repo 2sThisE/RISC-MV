@@ -157,11 +157,13 @@ kernel_trap_restore:
     POP R0
     IRET
 
-; R0=root, R1=entry, R2=user SP, R3=kernel SP. Kernel mappings are shared by
-; every user address space, so execution remains valid across SETPTBR.
+; R0=root, R1=entry, R2=user SP, R3=kernel SP, R4=initial R0..R14 array.
+; Kernel mappings are shared by every user address space, so execution remains
+; valid across SETPTBR.
 kernel_start_user:
     MOV R14, R1
     MOV R13, R2
+    MOV R11, R4
     SETPTBR R0
     SETKSP R3
     MOV SP, R3
@@ -169,6 +171,21 @@ kernel_start_user:
     MOVI64 R12, 0x4000000000000010
     PUSH R12
     PUSH R14
+    LOAD64O R0, R11, 0
+    LOAD64O R1, R11, 8
+    LOAD64O R2, R11, 16
+    LOAD64O R3, R11, 24
+    LOAD64O R4, R11, 32
+    LOAD64O R5, R11, 40
+    LOAD64O R6, R11, 48
+    LOAD64O R7, R11, 56
+    LOAD64O R8, R11, 64
+    LOAD64O R9, R11, 72
+    LOAD64O R10, R11, 80
+    LOAD64O R13, R11, 104
+    LOAD64O R14, R11, 112
+    LOAD64O R12, R11, 96
+    LOAD64O R11, R11, 88
     IRET
     HALT
 

@@ -8,6 +8,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 & $mainPath `
-    -r 1048576 `
+    -r 2097152 `
     -rom $romPath
 exit $LASTEXITCODE

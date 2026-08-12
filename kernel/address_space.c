@@ -185,6 +185,85 @@ int kernel_address_space_map_anonymous(KernelAddressSpace *space,
     return 0;
 }
 
+static KernelAddressPage *address_find_user_page(
+    KernelAddressSpace *space, uintptr_t virtual_address)
+{
+    KernelListNode *node = space->pages.sentinel.next;
+    while (node != &space->pages.sentinel) {
+        KernelAddressPage *page = (KernelAddressPage *)node;
+        if (page->kind == ADDRESS_PAGE_USER &&
+            page->virtual_address == virtual_address) {
+            return page;
+        }
+        node = node->next;
+    }
+    return NULL;
+}
+
+static uint64_t *address_lookup_level0(KernelAddressSpace *space,
+                                       uintptr_t virtual_address)
+{
+    uint64_t *root = kernel_phys_to_virt(space->root);
+    if (root == NULL) return NULL;
+    size_t index2 = (size_t)(((uint64_t)virtual_address >> 30) & 0x1FF);
+    uint64_t entry = root[index2];
+    if ((entry & KERNEL_PTE_VALID) == 0 ||
+        (entry & KERNEL_PTE_PERMISSION_MASK) != 0) {
+        return NULL;
+    }
+    uint64_t *level1 = kernel_phys_to_virt(
+        (uintptr_t)(entry & KERNEL_PTE_ADDRESS_MASK));
+    if (level1 == NULL) return NULL;
+    size_t index1 = (size_t)(((uint64_t)virtual_address >> 21) & 0x1FF);
+    entry = level1[index1];
+    if ((entry & KERNEL_PTE_VALID) == 0 ||
+        (entry & KERNEL_PTE_PERMISSION_MASK) != 0) {
+        return NULL;
+    }
+    return kernel_phys_to_virt(
+        (uintptr_t)(entry & KERNEL_PTE_ADDRESS_MASK));
+}
+
+int kernel_address_space_unmap_range(KernelAddressSpace *space,
+                                     uintptr_t virtual_address,
+                                     size_t size)
+{
+    if (space == NULL || size == 0 ||
+        ((uint64_t)virtual_address & KERNEL_PAGE_MASK) != 0 ||
+        ((uint64_t)size & KERNEL_PAGE_MASK) != 0 ||
+        (uint64_t)virtual_address < KERNEL_USER_IMAGE_BASE ||
+        (uint64_t)virtual_address > UINT64_MAX - (uint64_t)size ||
+        (uint64_t)virtual_address + (uint64_t)size > KERNEL_USER_STACK_TOP) {
+        return 1;
+    }
+
+    kernel_spin_lock(&space->lock);
+    uintptr_t end = virtual_address + size;
+    for (uintptr_t page = virtual_address; page < end;
+         page += (uintptr_t)KERNEL_PAGE_SIZE) {
+        uint64_t *level0 = address_lookup_level0(space, page);
+        size_t index0 = (size_t)(((uint64_t)page >> 12) & 0x1FF);
+        if (level0 == NULL || (level0[index0] & KERNEL_PTE_VALID) == 0 ||
+            (level0[index0] & KERNEL_PTE_USER) == 0 ||
+            address_find_user_page(space, page) == NULL) {
+            kernel_spin_unlock(&space->lock);
+            return 1;
+        }
+    }
+    for (uintptr_t page = virtual_address; page < end;
+         page += (uintptr_t)KERNEL_PAGE_SIZE) {
+        uint64_t *level0 = address_lookup_level0(space, page);
+        size_t index0 = (size_t)(((uint64_t)page >> 12) & 0x1FF);
+        KernelAddressPage *record = address_find_user_page(space, page);
+        level0[index0] = 0;
+        kernel_list_remove(&space->pages, &record->node);
+        kernel_pmm_free_page(record->physical_address);
+        kernel_free(record);
+    }
+    kernel_spin_unlock(&space->lock);
+    return 0;
+}
+
 int kernel_address_space_resolve(const KernelAddressSpace *space,
                                  uintptr_t virtual_address,
                                  uint64_t required_flags,

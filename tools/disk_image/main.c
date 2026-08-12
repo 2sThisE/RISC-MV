@@ -12,9 +12,9 @@ static void print_usage(const char *program)
 {
     fprintf(stderr,
             "Usage:\n"
-            "  %s create -o DISK.img --size SIZE --bootloader BOOT.exf --kernel KERNEL.exf [--reproducible]\n"
+            "  %s create -o DISK.img --size SIZE --bootloader BOOT.exf --kernel KERNEL.exf --init INIT.exf [--reproducible]\n"
             "  %s inspect DISK.img\n"
-            "SIZE accepts an optional binary K, M or G suffix.\n",
+            "SIZE accepts an optional binary K, M or G suffix (64 MiB..64 GiB).\n",
             program,
             program);
 }
@@ -122,6 +122,7 @@ static int create_image(int argc, char **argv)
     const char *output_path = NULL;
     const char *bootloader_path = NULL;
     const char *kernel_path = NULL;
+    const char *init_path = NULL;
     uint64_t disk_size = 0;
     uint32_t create_flags = 0;
     for (int i = 2; i < argc; ++i) {
@@ -136,6 +137,8 @@ static int create_image(int argc, char **argv)
             bootloader_path = argv[++i];
         } else if (strcmp(argv[i], "--kernel") == 0 && i + 1 < argc) {
             kernel_path = argv[++i];
+        } else if (strcmp(argv[i], "--init") == 0 && i + 1 < argc) {
+            init_path = argv[++i];
         } else if (strcmp(argv[i], "--reproducible") == 0) {
             create_flags |= CVM_DISK_CREATE_REPRODUCIBLE;
         } else {
@@ -143,12 +146,12 @@ static int create_image(int argc, char **argv)
         }
     }
     if (output_path == NULL || bootloader_path == NULL ||
-        kernel_path == NULL || disk_size == 0) {
+        kernel_path == NULL || init_path == NULL || disk_size == 0) {
         return 2;
     }
     if (!has_exf_extension(bootloader_path) ||
-        !has_exf_extension(kernel_path)) {
-        fputs("vmkdisk: bootloader and kernel must be RISC-MV .exf files\n",
+        !has_exf_extension(kernel_path) || !has_exf_extension(init_path)) {
+        fputs("vmkdisk: bootloader, kernel and init must be RISC-MV .exf files\n",
               stderr);
         return 2;
     }
@@ -166,6 +169,13 @@ static int create_image(int argc, char **argv)
         free(bootloader);
         return 1;
     }
+    size_t init_size;
+    uint8_t *init = read_image("init", init_path, &init_size);
+    if (init == NULL) {
+        free(kernel);
+        free(bootloader);
+        return 1;
+    }
     char error[192];
     CvmDiskStatus status = cvm_disk_image_create(output_path,
                                                   disk_size,
@@ -173,11 +183,14 @@ static int create_image(int argc, char **argv)
                                                   bootloader_size,
                                                   kernel,
                                                   kernel_size,
+                                                  init,
+                                                  init_size,
                                                   create_flags,
                                                   error,
                                                   sizeof(error));
     free(bootloader);
     free(kernel);
+    free(init);
     if (status != CVM_DISK_OK) {
         fprintf(stderr,
                 "vmkdisk: create failed: %s: %s\n",
@@ -205,6 +218,9 @@ static int create_image(int argc, char **argv)
     printf("  RISC-MV boot partition: LBA %" PRIu64 " + %" PRIu64 "\n",
            info.partition_start_lba,
            info.partition_sectors);
+    printf("  RISC-MV system partition: LBA %" PRIu64 " + %" PRIu64 "\n",
+           info.system_partition_start_lba,
+           info.system_partition_sectors);
     printf("  FAT32: %u sectors/cluster, %u clusters\n",
            info.sectors_per_cluster,
            info.cluster_count);
@@ -214,6 +230,9 @@ static int create_image(int argc, char **argv)
     printf("  /BOOT/KERNEL.EXF: %" PRIu64 " bytes, first cluster %u\n",
            info.kernel_size,
            info.kernel_first_cluster);
+    printf("  RMFS /BIN/INIT.EXF: %" PRIu64 " bytes, inode %" PRIu64 "\n",
+           info.init_size,
+           info.init_inode);
     return 0;
 }
 
@@ -232,7 +251,7 @@ static int inspect_image(const char *path)
                 error);
         return 1;
     }
-    printf("Valid RISC-MV GPT/FAT32 boot disk\n");
+    printf("Valid RISC-MV GPT disk (FAT32 boot + RMFS system)\n");
     printf("  image:              %s\n", path);
     printf("  size:               %" PRIu64 " bytes\n", info.disk_size);
     printf("  sectors:            %" PRIu64 "\n", info.total_sectors);
@@ -240,6 +259,10 @@ static int inspect_image(const char *path)
            info.partition_start_lba);
     printf("  partition sectors:  %" PRIu64 "\n",
            info.partition_sectors);
+    printf("  system partition LBA: %" PRIu64 "\n",
+           info.system_partition_start_lba);
+    printf("  system sectors:       %" PRIu64 "\n",
+           info.system_partition_sectors);
     printf("  FAT sectors:        %u\n", info.fat_sectors);
     printf("  sectors/cluster:    %u\n", info.sectors_per_cluster);
     printf("  clusters:           %u\n", info.cluster_count);
@@ -248,6 +271,12 @@ static int inspect_image(const char *path)
            info.bootloader_size);
     printf("  kernel cluster:     %u\n", info.kernel_first_cluster);
     printf("  kernel size:        %" PRIu64 " bytes\n", info.kernel_size);
+    printf("  RMFS blocks:          %" PRIu64 " (%" PRIu64 " free)\n",
+           info.rmfs_total_blocks, info.rmfs_free_blocks);
+    printf("  RMFS inodes:          %" PRIu64 " (%" PRIu64 " free)\n",
+           info.rmfs_inode_count, info.rmfs_free_inodes);
+    printf("  init inode:           %" PRIu64 "\n", info.init_inode);
+    printf("  init size:            %" PRIu64 " bytes\n", info.init_size);
     return 0;
 }
 

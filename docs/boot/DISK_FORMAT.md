@@ -11,13 +11,15 @@ LBA 0                  Protective MBR
 LBA 1                  Primary GPT header
 LBA 2..33              Primary partition entries (128 * 128 bytes)
 LBA 34..2047           Alignment gap
-LBA 2048..last-33      RISC-MV FAT32 boot partition
+LBA 2048..83967        RISC-MV FAT32 boot partition (40 MiB)
+LBA 83968..last-33     RISC-MV RMFS system partition
 last-32..last-1        Backup partition entries
 last LBA               Backup GPT header
 ```
 
 GPT의 first usable LBA는 34지만 부트 파티션은 1 MiB 정렬을 위해 LBA
-2048에서 시작한다. 파티션은 backup GPT 직전의 last usable LBA까지다.
+2048에서 시작한다. boot partition은 81920 sector이고, 그 다음 LBA 83968부터
+backup GPT 직전의 last usable LBA까지 system partition으로 사용한다.
 
 ## 부트 파티션
 
@@ -27,7 +29,7 @@ Partition Type GUID:
 9f7c3a21-6d52-4bc8-a3e1-43564d424f4f
 ```
 
-기존 disk ABI 호환을 위해 partition type GUID, GPT entry name `CVM Boot`와
+기존 disk ABI 호환을 위해 partition type GUID와
 FAT volume label `CVM BOOT`는 레거시 값을 유지한다. 기본 생성은 운영체제
 난수원으로 디스크 GUID와 partition unique GUID를 만든다. 재현 가능한 빌드가 필요할 때만
 `vmkdisk create --reproducible`을 사용하며, 이 경우 kernel 이미지와 디스크
@@ -71,3 +73,19 @@ ROM은 GPT에서 RISC-MV GUID를 찾고 `BOOT/BOOT.EXF`를 실행한다. 2차 �
 
 CRC32는 손상 검출용이다. 악의적인 이미지에 대한 보안 부팅은 추후 서명
 규격으로 별도 추가한다.
+
+## 시스템 파티션
+
+Partition Type GUID:
+
+```text
+3a92d7e4-1d2b-4c68-9a6f-524953434d56
+```
+
+system partition은 [RMFS.md](../system/RMFS.md) v1로 포맷한다. reference
+kernel은 GPT에서 이 GUID를 찾아 RMFS를 `/`로 마운트하고
+`/BIN/INIT.EXF`를 PID 1로 실행한다. 따라서 FAT32는 firmware와 bootloader의
+읽기 전용 부팅 계약만 담당하고, 운영체제 파일 쓰기는 RMFS에만 일어난다.
+
+RMFS 검사는 primary/backup superblock과 CRC32, geometry, allocation bitmap,
+root/BIN/init inode, directory entry CRC와 `INIT.EXF` 자체 CRC까지 포함한다.

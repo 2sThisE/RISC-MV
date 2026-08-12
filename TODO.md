@@ -27,7 +27,8 @@
 ### 부팅과 실행 포맷
 
 - [x] Boot ROM -> `BOOT.EXF` -> `KERNEL.EXF` 2단계 부팅
-- [x] GPT/FAT32 가상디스크와 firmware service/BootInfo handoff
+- [x] GPT의 40 MiB FAT32 boot partition + RMFS system partition과
+  firmware service/BootInfo handoff
 - [x] 고정 kernel VA, 동적 물리 배치, RAM direct-map과 MMU-on 진입
 - [x] 임시 page table과 bootloader/staging 메모리의 kernel 회수
 - [x] RISC-MV EXF v1: `.exf`, `RMVEXF01`, `RA64`
@@ -46,16 +47,18 @@
 
 ### reference kernel P1.2
 
-- [x] C kernel entry, BootInfo 검증, PMM, MMU, heap과 기본 자료구조
+- [x] C kernel entry, BootInfo 검증, 범위 기반 지연 PMM, MMU, heap과 기본 자료구조
 - [x] 독립 user address space, EXF 검증/적재와 user/kernel 권한 분리
 - [x] syscall dispatcher와 page-aware user pointer copy/검증
 - [x] timer IRQ 기반 전체 문맥 교환과 단일 코어 선점 스케줄링
-- [x] GPT/FAT32 VFS 읽기/쓰기와 `/BOOT/KTEST.TXT` 내용 검증
+- [x] RMFS VFS 읽기/쓰기와 `/KTEST.TXT` 내용 검증
 - [x] UART, block, keyboard와 display의 최소 kernel driver
 
 현재 scheduler는 동적 `KernelProcess`/`KernelThread`와 intrusive runnable queue로
-3개 process, 4개 thread를 선점 실행한다. wait, file descriptor, user fault 격리와
-SMP kernel scheduler는 아직 없다.
+3개 process, 4개 thread를 선점 실행한다. user fault는 해당 process에 격리하고
+부모 없는 zombie는 안전한 다음 trap에서 수거한다. parent/child와 process
+`wait`/`waitpid`, thread `join`의 `BLOCKED -> RUNNABLE` wakeup은 구현됐다.
+file descriptor, 일반 wait queue/idle과 SMP kernel scheduler는 아직 없다.
 
 ## P0 — 현재 차단 항목
 
@@ -67,14 +70,13 @@ SMP kernel scheduler는 아직 없다.
 P1.3은 아래 순서를 따른다. 뒤 단계가 앞 단계의 임시 구조를 다시 뜯지 않도록
 Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 
-### P1.3-A — Process/Thread 기반과 동적 scheduler — 진행 중
+### P1.3-A — Process/Thread 기반과 동적 scheduler — 완료
 
 - [x] 고정 `KernelTask[2]`를 `KernelProcess`와 `KernelThread`로 분리
-- [ ] Process의 parent/FD table 실제 소유권과 정리 규칙 구현
-  (PID, address space와 thread 목록 소유는 완료)
+- [x] Process가 PID, address space, user image와 thread 목록을 소유하고 파괴
 - [x] Thread가 TID, GPR/PC/FLAGS/SP, kernel stack과 scheduling 상태를 소유
-- [ ] `BLOCKED` 진입/복귀와 `DEAD` 수거를 포함한 전체 상태 전이 완성
-  (`NEW -> RUNNABLE -> RUNNING -> ZOMBIE` 경로는 완료)
+- [x] `NEW -> RUNNABLE -> RUNNING -> ZOMBIE` 전이와 부모 없는 process의
+  deferred reap에서 thread `DEAD` 처리 및 객체 수거
 - [x] 고정 배열 대신 intrusive runnable queue와 동적 PID/TID 할당기 사용
 - [x] 같은 Process의 Thread가 PTBR을 공유하고 각자 user/kernel stack을 사용
 - [x] 주소 공간 변경 시에만 PTBR을 교체하도록 문맥 교환 경계 정리
@@ -85,18 +87,24 @@ Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 완료 조건: 고정 task 개수 없이 단일 코어에서 process와 software thread를
 동적으로 생성하고 선점할 수 있어야 한다.
 
-### P1.3-B — 수명 관리와 user fault 격리
+parent/child와 wait 가능한 zombie는 P1.3-B, process별 FD table은 P1.3-D,
+일반적인 `BLOCKED -> RUNNABLE` wait queue와 idle은 P1.3-E에서 확장한다.
 
-- [ ] parent/child reference와 wait 가능한 zombie의 소유권 규칙 정의
-  (부모 없는 process의 deferred reap 순서는 완료)
+### P1.3-B — 수명 관리와 user fault 격리 — 완료
+
+- [x] parent/child reference와 wait 가능한 zombie의 소유권 규칙 정의
+  (부모 없는 process는 deferred reap, 부모 있는 zombie는 wait까지 보존)
 - [x] thread 종료와 마지막 thread 종료를 process zombie 전환으로 연결
-- [ ] parent/child 관계, exit status, zombie와 `wait`/`waitpid` 구현
-- [ ] thread `join`과 이미 종료된 대상의 즉시 수거 규칙 구현
-- [ ] orphan 처리와 중복 wait/join 방지
+- [x] parent/child 관계, signed 64-bit exit status, zombie와 `wait`/`waitpid` 구현
+- [x] process wait 대상 대기를 위한 `BLOCKED -> RUNNABLE` 전이와 wakeup 구현
+- [x] thread `join`, 이미 종료된 대상 수거와 현재 stack 이탈 뒤 deferred reap
+- [x] 부모 종료 시 orphan 자동 수거와 중복 process wait의 `-ECHILD` wakeup
+- [x] self/중복 thread join 방지와 잘못된 TID·user pointer 오류 처리
 - [x] user page fault, illegal instruction과 privilege fault를 현재 process 종료로 전달
 - [x] kernel mode fault와 손상된 kernel 상태는 기존 panic 유지
-- [ ] address space, page, EXF image, stack과 FD가 정확히 한 번 회수되는지 검사
-  (부모 없는 process의 address space/page/user·kernel stack 수거와 heap 검증 완료)
+- [x] address space, page, EXF image와 user/kernel stack이 정확히 한 번
+  회수되는지 8회 반복 생성/종료와 PMM free-page 기준값으로 검사
+  (FD 수명 검사는 P1.3-D에서 추가)
 - [x] 한 user process가 fault로 종료돼도 다른 process가 계속 실행되는 회귀 테스트
 
 완료 조건: 잘못된 user EXF가 kernel이나 다른 process를 종료시키지 않고 모든
@@ -104,29 +112,46 @@ Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 
 ### P1.3-C — VFS 기반 EXF `exec`와 초기 userland
 
-- [ ] VFS 경로에서 EXF 전체를 안전하게 읽는 loader API
-- [ ] `RMVEXF01`, `RA64`, version, CRC32, segment 범위와 W^X 재검증
-- [ ] 새 Process/address space와 초기 Thread를 만든 뒤 원자적으로 runnable 등록
-- [ ] 실패 중간 단계에서 부분 생성된 page와 process를 전부 rollback
-- [ ] 초기 user stack의 `argc/argv/envp` RArchM64 ABI 정의
-- [ ] kernel이 `/BIN/INIT.EXF`를 찾아 첫 user process로 시작하는 경로
-- [ ] `vmkdisk`가 boot 파일 외 user EXF를 넣을 수 있는 manifest/input 규격
-- [ ] kernel에 내장된 user test image는 회귀 전용 fallback으로 축소
-- [ ] 손상, 잘못된 ISA, 중첩 segment와 NX 위반 EXF 실행 거부 테스트
+- [x] VFS 경로에서 크기 상한과 exact-size 할당으로 EXF 전체를 읽는 공통
+  user-image/process loader API
+- [x] `RMVEXF01`, `RA64`, version, CRC32, segment 범위·중첩과 W^X 재검증
+- [x] 새 Process/address space와 초기 Thread 완성 뒤 검증된 상태만 원자적으로
+  runnable 등록
+- [x] loader/thread 생성 실패와 queue 등록 중간 실패에서 page, process,
+  thread와 scheduler counter를 전부 rollback
+- [x] 초기 user stack에 16-byte aligned `argc`, `argv[]`, NULL, `envp[]`, NULL
+  테이블을 만들고 R0/R1/R2에도 `argc/argv/envp`를 전달하는 ABI 정의·검사
+- [x] kernel이 `/BIN/INIT.EXF`를 찾아 PID 1 첫 user process로 시작하는 경로
+- [x] 부모가 먼저 종료된 process를 살아 있는 PID 1 init으로 재부모화하고,
+  init 종료 뒤 부모 없는 zombie는 자동 회수하는 정책
+- [x] `vmkdisk --init INIT.exf` 입력으로 user EXF를 RMFS
+  `/BIN/INIT.EXF`에 패키징하고 검사하는 input 규격
+- [x] 디스크 init 정식화 뒤 내장 wait/join user image 생성기를 링크에서 제거하고
+  loader/lifetime/fault용 최소 회귀 image만 유지
+- [x] 손상 CRC, 잘못된 ISA, 실제 중첩 segment와 W^X 위반 EXF 거부 테스트
 
 완료 조건: kernel을 다시 빌드하지 않고 가상디스크의 user EXF를 교체해 실행할
 수 있어야 한다.
 
 ### P1.3-D — 프로세스별 file descriptor와 파일 syscall
 
-- [ ] VFS vnode/open-file handle과 process FD table의 소유권/참조 횟수 정의
-- [ ] FD 0/1/2를 keyboard input, UART console에 연결
-- [ ] `open`, `close`, `read`, `write`, `seek` syscall
-- [ ] 파일 offset, append/read-only 권한과 독립 open handle 규칙
-- [ ] path와 user buffer의 길이/overflow/page 권한 검증
-- [ ] 안정된 errno 값과 syscall ABI 문서화
-- [ ] process 종료와 `exec` 성공/실패 시 FD 유지·정리 규칙
-- [ ] 서로 다른 process의 FD 격리와 잘못된 FD/user pointer 회귀 테스트
+- [x] VFS vnode/open-file handle과 process별 32-slot FD table의
+  소유권/참조 횟수·process 종료 정리 정의
+- [x] 새 process의 FD 0을 keyboard input, FD 1/2를 UART console
+  pseudo-vnode에 연결
+- [x] FD table 기반 `open`, `close`, `read`, `write`, `seek`, `fsync` syscall과
+  `/BIN/INIT.EXF`와 `/KTEST.TXT`의 실제 RMFS 파일 왕복 회귀
+- [x] open-file별 독립 offset, append-at-write, read/write flag와
+  read-only block 장치의 write-open 거부 규칙
+- [x] path 128-byte NUL bound, user buffer address+size overflow,
+  signed 반환 범위와 page별 read/write 권한 검증
+- [x] `include/rarchm64_syscall.h`를 syscall 번호/open flag/seek/fsync/errno의
+  ABI v1 단일 기준으로 추가하고 ABI 문서와 동기화
+- [x] process 종료 시 모든 FD slot 참조를 닫고 vnode/open-file을 최종 회수
+- [ ] in-place `exec` syscall 도입 시 성공하면 FD를 유지하고 실패하면 image와
+  FD table을 모두 원상 유지하는 transactional 교체 규칙
+- [x] 서로 다른 process의 FD table 격리와 중복 close/NULL user pointer를
+  실제 init syscall로 거부하는 회귀 테스트
 
 완료 조건: Clang으로 빌드한 user EXF가 syscall만으로 가상디스크 파일을 열고
 읽고 쓰고 닫을 수 있어야 한다.
@@ -140,6 +165,8 @@ Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 - [ ] keyboard IRQ ring buffer와 blocking `read`
 - [ ] interrupt context에서 할당/수면하지 않는 IRQ-safe queue와 lock 규칙
 - [ ] IRQ-before-sleep, timeout-vs-completion과 wakeup 유실 경쟁 테스트
+- [x] init 통합 실패를 `A`~`Q` 단계 코드로 분리하고 동일 persistent image
+  20회 반복 부팅으로 wait/join 및 파일 syscall 경로 무실패 확인
 
 완료 조건: I/O를 기다리는 thread가 CPU를 polling하지 않고 다른 runnable
 thread가 계속 실행되어야 한다.
@@ -157,26 +184,48 @@ thread가 계속 실행되어야 한다.
 완료 조건: user process가 선택한 유효 해상도로 화면을 출력하고 buffer를
 누수 없이 교체할 수 있어야 한다.
 
-### P1.3-G — FAT32/VFS 기능 확장
+### P1.3-G — RMFS/VFS 기반 — 완료
 
-- [ ] FAT32 long-file-name 읽기/생성/삭제
-- [ ] 하위 디렉터리 탐색, 생성과 삭제
-- [ ] `truncate`, `unlink`, `rename`과 빈 디렉터리 규칙
-- [ ] VFS와 FAT metadata/data의 동시 접근 lock
-- [ ] 부분 쓰기 실패 시 FAT chain과 directory entry 일관성 보강
-- [ ] 다중 sector/cluster, 조각난 chain과 디스크 부족 회귀 테스트
+- [x] FAT32를 firmware/bootloader 전용으로 한정하고 별도 GPT system
+  partition을 RMFS v1로 포맷
+- [x] 4KiB block, 256-byte inode/directory entry, 239-byte 이름과 6개 inline
+  extent 온디스크 규격
+- [x] inode/block bitmap, primary/backup superblock과 metadata CRC32
+- [x] `/`, `/BIN`, `/BIN/INIT.EXF` 초기 volume과 host formatter/inspector
+- [x] kernel RMFS mount, 경로 탐색, range/whole read, regular file 생성·교체,
+  FD 부분 write/append와 flush
+- [x] volume 크기 기반 동적 inode 수, 64 GiB disk image와 16 MiB 파일 제한 제거
+- [x] 최대 6개 조각 extent allocator, 디렉터리 data block 자동 확장과
+  4KiB scratch 기반 부분 덮어쓰기
+- [x] mount 수명 bitmap cache, 변경 bitmap block만 기록, table CRC32와
+  DIRTY 이후 I/O 실패 시 강제 unmount
+- [x] 새 data 선기록, DIRTY/CLEAN state, inode 교체 뒤 이전 extent 반환 순서
+- [x] RMFS 전역 lock과 block DMA bounce-page lock
+- [x] 4KiB scratch를 kernel stack 밖에서 재사용하고 전체 BSS를 MMU RW로 매핑
+- [x] GPT/FAT/RMFS/EXF 손상 검사 unit test와 실제 init read/write boot 회귀
+- [ ] `mkdir`, `truncate`, `unlink`, `rename`
+- [ ] uid/gid/mode 권한 강제, timestamp와 link count 정책
+- [ ] 외부 extent tree와 디스크 부족/고조각화 stress test
+- [x] 변경된 file block만 교체하는 block-granular COW, extent split/merge와
+  EOF 이후 hole zero-fill 회귀
+- [x] 64-entry metadata block cache, explicit `fsync`와 DIRTY-state 기반
+  transaction group commit(32-write 자동 commit 포함)
+- [ ] 온디스크 metadata journal과 replay 기반 group commit 복구
+- [ ] journal 또는 copy-on-write recovery와 DIRTY volume fsck/replay 도구
 
-완료 조건: 초기 userland가 8.3 이름 제약 없이 일반적인 디렉터리와 파일을
-안전하게 사용할 수 있어야 한다.
+완료 조건: 기본 system volume이 FAT32 8.3 제약 없이 RMFS에서 user EXF와
+regular file을 읽고 생성·교체할 수 있어야 한다. 일반 파일시스템 관리 명령과
+전원 차단 복구는 위 후속 항목으로 확장한다.
 
 ### P1.3 전체 완료 조건
 
-- [ ] `/BIN/INIT.EXF`가 부팅 후 첫 process로 실행
+- [x] `/BIN/INIT.EXF`가 부팅 후 PID 1 첫 process로 실행
 - [x] 여러 process와 process 내부 여러 thread가 선점 실행
-- [ ] user fault가 해당 process에만 격리
+- [x] user fault가 해당 process에만 격리
 - [ ] file/keyboard/block I/O가 FD와 blocking syscall로 동작
-- [ ] process 종료 후 PMM page, heap, FD와 wait queue 누수 없음
-- [x] 현재 단계 전체 unit test와 실제 GPT/FAT32 boot regression 통과
+- [x] process 종료 후 현재 PMM page, heap과 process/thread wait 상태 누수 없음
+- [ ] FD와 일반 wait queue 도입 뒤 해당 자원 누수 없음
+- [x] 현재 단계 전체 unit test와 실제 GPT/FAT32+RMFS boot regression 통과
 
 ## P1.4 — SMP kernel과 hardware-thread 활용
 
@@ -286,8 +335,7 @@ version, object metadata, tool 진단과 호환성 테스트를 함께 변경한
 
 ## 바로 시작할 작업
 
-1. user fault를 현재 process 종료로 격리하고 다른 runnable process는 계속 실행
-2. 종료된 thread/process의 kernel stack, user page와 주소 공간 회수 순서 확정
-3. parent/child, `wait`/`waitpid`와 thread `join` 수명 규칙 구현
-4. `BLOCKED`/`DEAD` 전이와 idle 경로를 scheduler에 연결
-5. fault 격리와 반복 생성/종료 자원 누수 회귀 테스트 추가
+1. P1.3-D의 transactional in-place `exec`와 FD 유지 규칙 구현
+2. P1.3-E scheduler wait queue와 wake-one/wake-all primitive 구현
+3. timer 기반 `sleep`과 runnable thread가 없을 때 idle/`WAIT` 경로 구현
+4. block driver를 early-boot polling과 scheduler 이후 IRQ mode로 분리

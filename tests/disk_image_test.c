@@ -1,5 +1,7 @@
 #include "boot_format.h"
 #include "disk_image.h"
+#include "rmfs_format.h"
+#include "rmfs_image.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -69,8 +71,27 @@ int test_disk_image(void)
     size_t kernel_size;
     uint8_t *kernel = make_test_kernel(&kernel_size);
     char error[192];
+    assert(CVM_DISK_MAX_SIZE == UINT64_C(64) * 1024 * 1024 * 1024);
+    assert(rmfs_image_recommended_inode_count(128) ==
+           RMFS_MIN_INODE_COUNT);
+    assert(rmfs_image_recommended_inode_count(UINT64_C(2097152)) == 2048);
+    assert(rmfs_image_recommended_inode_count(UINT64_MAX) ==
+           RMFS_MAX_INODE_COUNT);
+    assert(cvm_disk_image_create(path,
+                                 CVM_DISK_MAX_SIZE + CVM_DISK_SECTOR_SIZE,
+                                 kernel,
+                                 kernel_size,
+                                 kernel,
+                                 kernel_size,
+                                 kernel,
+                                 kernel_size,
+                                 CVM_DISK_CREATE_REPRODUCIBLE,
+                                 error,
+                                 sizeof(error)) == CVM_DISK_BAD_SIZE);
     assert(cvm_disk_image_create(path,
                                  CVM_DISK_MIN_SIZE,
+                                 kernel,
+                                 kernel_size,
                                  kernel,
                                  kernel_size,
                                  kernel,
@@ -86,17 +107,29 @@ int test_disk_image(void)
                                   sizeof(error)) == CVM_DISK_OK);
     assert(info.disk_size == CVM_DISK_MIN_SIZE);
     assert(info.partition_start_lba == CVM_BOOT_PARTITION_START_LBA);
+    assert(info.partition_sectors == CVM_BOOT_PARTITION_SECTORS);
+    assert(info.system_partition_start_lba ==
+           CVM_BOOT_PARTITION_START_LBA + CVM_BOOT_PARTITION_SECTORS);
+    assert(info.system_partition_sectors > 0);
     assert(info.sectors_per_cluster == 1);
     assert(info.cluster_count >= 65525);
     assert(info.bootloader_first_cluster == 4);
     assert(info.bootloader_size == kernel_size);
     assert(info.kernel_first_cluster == 5);
     assert(info.kernel_size == kernel_size);
+    assert(info.init_first_cluster == 0);
+    assert(info.init_size == kernel_size);
+    assert(info.rmfs_total_blocks > 128);
+    assert(info.rmfs_inode_count == 1024);
+    assert(info.init_inode == 3);
+    assert(info.init_first_block >= 3);
     assert((info.disk_guid[7] & 0xF0) == 0x50);
     assert((info.disk_guid[8] & 0xC0) == 0x80);
 
     assert(cvm_disk_image_create(path,
                                  CVM_DISK_MIN_SIZE,
+                                 kernel,
+                                 kernel_size,
                                  kernel,
                                  kernel_size,
                                  kernel,
@@ -150,10 +183,30 @@ int test_disk_image(void)
                                   NULL,
                                   error,
                                   sizeof(error)) == CVM_DISK_BAD_KERNEL);
+    flip_byte(path, (long)(kernel_lba * 512));
+
+    uint64_t rmfs_offset = info.system_partition_start_lba * 512;
+    assert(rmfs_offset <= (uint64_t)LONG_MAX);
+    flip_byte(path, (long)rmfs_offset);
+    assert(cvm_disk_image_inspect(path,
+                                  NULL,
+                                  error,
+                                  sizeof(error)) == CVM_DISK_BAD_RMFS);
+    flip_byte(path, (long)rmfs_offset);
+
+    uint64_t init_offset = rmfs_offset + info.init_first_block * 4096;
+    assert(init_offset <= (uint64_t)LONG_MAX);
+    flip_byte(path, (long)init_offset);
+    assert(cvm_disk_image_inspect(path,
+                                  NULL,
+                                  error,
+                                  sizeof(error)) == CVM_DISK_BAD_INIT);
     assert(remove(path) == 0);
 
     assert(cvm_disk_image_create(path,
                                  CVM_DISK_MIN_SIZE,
+                                 kernel,
+                                 kernel_size,
                                  kernel,
                                  kernel_size,
                                  kernel,
@@ -169,11 +222,15 @@ int test_disk_image(void)
     assert((info.disk_guid[8] & 0xC0) == 0x80);
     assert((info.partition_guid[7] & 0xF0) == 0x40);
     assert((info.partition_guid[8] & 0xC0) == 0x80);
+    assert((info.system_partition_guid[7] & 0xF0) == 0x40);
+    assert((info.system_partition_guid[8] & 0xC0) == 0x80);
     assert(remove(path) == 0);
 
     kernel[0] ^= 1;
     assert(cvm_disk_image_create(path,
                                  CVM_DISK_MIN_SIZE,
+                                 kernel,
+                                 kernel_size,
                                  kernel,
                                  kernel_size,
                                  kernel,
