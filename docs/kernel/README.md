@@ -37,10 +37,11 @@
 13. syscall vector 76에 dispatcher를 연결하고 page별 user 권한을 먼저
     검증하는 `copy_from_user`/`copy_to_user`로 잘못된 포인터와 overflow를
     fault 없이 거부한다. 초기 ABI는 `exit`, FD 기반 `write`/`read`, `yield`,
-    `getpid`, `wait`, `waitpid`, `join`, `open`, `close`, `seek`, `fsync`, `exec`다.
+    `getpid`, `wait`, `waitpid`, `join`, `open`, `close`, `seek`, `fsync`, `exec`,
+    timer 기반 `sleep`이다.
 14. `/BIN/INIT.EXF`를 읽어 PID 1 process로 만들고, 동적
     `KernelProcess`/`KernelThread` 객체로 총 2개 process와 3개 thread를 만든다.
-    init의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 16KiB
+    init의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 64KiB
     kernel stack을 사용한다. timer IRQ 0에서 전체 GPR, PC, FLAGS와 SP를
     저장·교체하며, 주소 공간이 바뀔 때만 PTBR을 교체한다. 모든 syscall 출력,
     종료와 timer 선점이 관측되어야 한다. 한 process는 의도적으로 NULL user
@@ -92,7 +93,8 @@ legacy 이름의 `cvmlink`로 `kernel.exf`와 `kernel.map`을 생성한다.
 - `fat32.c`: firmware 호환 FAT32 구현 자료
 - `rmfs.c`, `vfs.c`: RMFS extent/bitmap 파일 읽기·쓰기와 단일 root VFS
 - `syscall.c`: dispatcher, 표준 입출력·wait syscall과 user-copy 검증
-- `scheduler.c`: runnable/reap queue, timer 선점, wait/join wakeup과 문맥 교환
+- `scheduler.c`: runnable/reap/timeout queue, timer 선점, 일반 wait queue,
+  wait/join/sleep wakeup, idle과 문맥 교환
 - `exception.c`: VBR 구성, page-fault 정책, panic과 보호 자체 검사
 - `kernel.s`: entry, 예외/trap GPR 보존, user 진입, `IRET`, fault probe
 - `layout_start.s`, `layout_end.s`: 전체 section 경계와 bootstrap stack
@@ -163,9 +165,27 @@ status는 signed 64비트 값으로 user 주소에 기록하며 null status 포�
 unmap한 뒤 현재 kernel stack에서 벗어난 trap에서 객체와 kernel stack을
 수거한다. self-join은 `-EDEADLK`, 중복 join은 `-EBUSY`로 거부한다.
 
-실행 가능한 다른 thread가 없는 동안 살아 있는 대상을 기다리는 idle/`WAIT`
-경로와 `WNOHANG` 옵션은 아직 없다. 현재 이 경우의 `waitpid`/`join`은 임시로
-`-EAGAIN`을 반환한다.
+일반 `KernelWaitQueue`는 FIFO waiter 목록과 선택적인 timer deadline을 함께
+관리하며 wake-one/wake-all을 제공한다. timeout tick을 0으로 지정하면 IRQ가
+직접 깨울 때까지 무기한 대기하고, 양수면 timeout queue에도 동시에 등록한다.
+wake와 timeout 중 먼저 처리된 경로가 두 큐에서 thread를 원자적으로 분리하므로
+한 thread가 중복으로 runnable queue에 들어가지 않는다. 현재 단일 코어에서는
+trap 진입으로 interrupt가 꺼진 상태에서 조건을 재검사하고 waiter를 등록해야
+IRQ-before-sleep lost-wakeup이 없다. SMP 도입 시에는 이 구간을 IRQ-safe lock으로
+확장해야 한다.
+
+IRQ handler는 heap allocation, filesystem 진입, spin 대기나 수면을 하지 않는다.
+block handler는 장치 status/error를 snapshot하고 요청 wait queue 하나를 깨우며,
+keyboard handler는 MMIO queue를 고정 256-byte kernel ring으로 drain한 뒤 FIFO
+waiter에게 직접 복사하거나 ring에 보관한다. completion과 timeout은 동일한
+detach 경로를 사용하므로 늦게 도착한 두 번째 wake는 no-op이다.
+
+실행 가능한 thread가 없고 `BLOCKED` thread만 남으면 scheduler는 `EI; WAIT`로
+hardware idle에 들어간다. `EI` 직후 `WAIT` 실행 전에 timer IRQ가 도착한 경우
+handler가 저장된 PC를 idle 복귀 label로 옮겨 이미 처리한 IRQ 뒤 다시 잠드는
+경쟁을 막는다. `sleep(milliseconds)`는 2ms timer quantum 단위로 올림해 이
+timeout 경로를 사용한다. `waitpid`/`join`도 마지막 runnable thread를 block할 수
+있으며 `WNOHANG` 옵션은 아직 없다.
 
 현재 VFS는 RMFS system partition을 `/`로 마운트한다. RMFS는 최대 239바이트
 case-sensitive 이름, 256바이트 inode, inline extent 6개, inode/block bitmap과
@@ -181,7 +201,7 @@ FD slot은 참조 횟수가 있는 open-file handle을 가리키고 handle은 �
 FD 0에 read-only keyboard pseudo-vnode, FD 1과 2에 write-only UART
 pseudo-vnode를 기본 설치한다. RMFS metadata/data 접근은 filesystem lock으로,
 공용 block DMA bounce page는 block lock으로 직렬화한다. 4KiB scratch block은
-전역 lock 아래 재사용해 16KiB per-thread kernel stack을 소모하지 않는다.
+전역 lock 아래 재사용해 64KiB per-thread kernel stack을 소모하지 않는다.
 RMFS bitmap은 mount 동안 cache하고 inode/directory는 64-entry metadata block
 cache로 유지한다. 변경은 volume transaction group에 누적되어 같은 metadata
 block을 한 번만 기록하며 `fsync` 또는 32개 write에서 CLEAN commit과 flush를
@@ -190,6 +210,13 @@ block을 한 번만 기록하며 `fsync` 또는 32개 write에서 CLEAN commit�
 쓰기를 계속하지 않는다. 온디스크 journal replay는 아직 후속 범위다.
 세부 온디스크 규격은 [RMFS.md](../system/RMFS.md)에 있다.
 
-block 장치의 호스트 worker는 event 기반으로 잠들지만, boot 초기와 현재 kernel
-driver의 완료 확인은 `STATUS` polling이다. block IRQ 기반 sleep/wakeup과 keyboard
-IRQ 입력 queue는 후속 작업이다.
+block 장치의 호스트 worker는 event 기반으로 잠든다. scheduler 시작 전
+GPT/RMFS mount와 self-test는 interrupt 문맥이 없으므로 bounded `STATUS` polling을
+사용한다. scheduler 시작 뒤에는 block/keyboard vector와 controller mask를 켠다.
+각 block 요청은 현재 kernel C continuation의 SP와 전체 GPR을 per-thread kernel
+stack에 보존하고 wait queue에서 잠들며, 다른 runnable thread 또는 hardware
+`WAIT`가 실행된다. 완료 IRQ가 원래 continuation을 복구한다. filesystem syscall은
+sleep 가능한 gate로 직렬화하므로 다른 thread가 잠든 syscall이 소유한 filesystem
+spinlock에 진입해 CPU를 소모하지 않는다.
+init 회귀는 worker가 runnable인 동안 RMFS read를 수행하고 실제 continuation
+전환 및 block 요청/완료 IRQ 횟수 일치를 검사한다.

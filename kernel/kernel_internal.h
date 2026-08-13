@@ -110,12 +110,19 @@ int kernel_heap_self_test(void);
 
 int kernel_devices_init(void);
 int kernel_devices_self_test(void);
+int kernel_devices_enable_interrupts(void);
+int kernel_devices_runtime_valid(void);
+void kernel_devices_interrupt(uint64_t *frame);
 int kernel_block_read(uint64_t lba, void *buffer, size_t sector_count);
 int kernel_block_write(uint64_t lba, const void *buffer, size_t sector_count);
 int kernel_block_flush(void);
 uint64_t kernel_block_capacity(void);
 int kernel_block_read_only(void);
 int kernel_keyboard_poll(uint64_t *event);
+int kernel_keyboard_read(uint64_t *frame,
+                         uintptr_t user_buffer,
+                         size_t size,
+                         int64_t *result);
 int kernel_display_present_test_pattern(void);
 
 int kernel_vfs_init(void);
@@ -164,6 +171,7 @@ int64_t kernel_vfs_file_seek(KernelOpenFile *file,
                                int64_t offset,
                                uint32_t whence);
 int kernel_vfs_file_sync(KernelOpenFile *file);
+KernelVnodeKind kernel_vfs_file_kind(KernelOpenFile *file);
 
 int kernel_copy_from_user(const KernelAddressSpace *space,
                           void *destination,
@@ -173,6 +181,9 @@ int kernel_copy_to_user(const KernelAddressSpace *space,
                         uintptr_t destination,
                         const void *source,
                         size_t size);
+int kernel_user_buffer_writable(const KernelAddressSpace *space,
+                                uintptr_t destination,
+                                size_t size);
 int kernel_syscall_self_test(void);
 void kernel_syscall_dispatch(uint64_t *frame);
 
@@ -180,6 +191,33 @@ KernelAddressSpace *kernel_scheduler_current_space(void);
 KernelFdTable *kernel_scheduler_current_fd_table(void);
 uint64_t kernel_scheduler_current_pid(void);
 void kernel_scheduler_yield(uint64_t *frame);
+void kernel_wait_queue_init(KernelWaitQueue *queue);
+size_t kernel_wait_queue_wake_one(KernelWaitQueue *queue, int64_t result);
+size_t kernel_wait_queue_wake_all(KernelWaitQueue *queue, int64_t result);
+size_t kernel_wait_queue_wake_read_one(KernelWaitQueue *queue,
+                                       const void *data,
+                                       size_t size);
+int kernel_scheduler_block_current(uint64_t *frame,
+                                   KernelWaitQueue *queue,
+                                   uint64_t timeout_ticks,
+                                   int64_t timeout_result);
+int kernel_scheduler_block_read(uint64_t *frame,
+                                KernelWaitQueue *queue,
+                                uintptr_t buffer_address,
+                                size_t buffer_size);
+int kernel_scheduler_block_kernel(KernelWaitQueue *queue,
+                                  uint64_t timeout_ticks,
+                                  int64_t timeout_result,
+                                  int64_t *wake_result);
+void kernel_scheduler_syscall_enter(uint64_t *frame);
+void kernel_scheduler_syscall_leave(uint64_t *frame);
+int kernel_scheduler_termination_requested(int64_t *status);
+int kernel_scheduler_running(void);
+uint64_t kernel_scheduler_ticks(void);
+void kernel_scheduler_interrupt_return(uint64_t *frame);
+int kernel_scheduler_sleep(uint64_t *frame,
+                           uint64_t milliseconds,
+                           int64_t *result);
 int kernel_scheduler_waitpid(uint64_t *frame,
                              uint64_t pid,
                              uintptr_t status_address,
@@ -225,6 +263,19 @@ extern void kernel_exception_entry(void);
 extern void kernel_page_fault_entry(void);
 extern void kernel_syscall_entry(void);
 extern void kernel_timer_entry(void);
+extern void kernel_device_irq_entry(void);
+extern void kernel_idle_wait(void);
+extern uint8_t kernel_idle_wait_instruction[];
+extern uint8_t kernel_idle_wait_resume[];
+extern void kernel_suspend_to_user(uintptr_t *resume_sp,
+                                   uint64_t page_table_root,
+                                   uint64_t entry,
+                                   uint64_t user_stack_pointer,
+                                   uint64_t kernel_stack_pointer,
+                                   const uint64_t *initial_registers);
+extern void kernel_switch_continuation(uintptr_t *current_resume_sp,
+                                       uintptr_t next_resume_sp);
+extern void kernel_resume_continuation(uintptr_t resume_sp);
 extern void kernel_start_user(uint64_t page_table_root,
                               uint64_t entry,
                               uint64_t stack_pointer,

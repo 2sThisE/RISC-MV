@@ -58,8 +58,8 @@
 2개 process, 3개 thread를 선점 실행한다. user fault는 해당 process에 격리하고
 부모 없는 zombie는 안전한 다음 trap에서 수거한다. parent/child와 process
 `wait`/`waitpid`, thread `join`의 `BLOCKED -> RUNNABLE` wakeup은 구현됐다.
-process별 file descriptor와 transactional `exec`도 구현됐으며 일반 wait
-queue/idle과 SMP kernel scheduler는 아직 없다.
+process별 file descriptor와 transactional `exec`, 일반 wait queue, timer sleep과
+hardware idle도 구현됐으며 SMP kernel scheduler는 아직 없다.
 
 ## P0 — 현재 차단 항목
 
@@ -83,7 +83,7 @@ Process/Thread 소유권과 scheduler 상태 모델을 먼저 확정한다.
 - [x] 주소 공간 변경 시에만 PTBR을 교체하도록 문맥 교환 경계 정리
 - [x] `thread_create`, `thread_exit`, `yield`에 해당하는 kernel 내부 경로 구현
 - [x] 기존 user syscall/선점/종료 자체 검사를 새 구조에서 통과
-- [x] 3개 process와 한 process의 2개 thread를 함께 선점하는 실제 부팅 테스트
+- [x] 2개 process와 한 process의 2개 thread를 함께 선점하는 실제 부팅 테스트
 
 완료 조건: 고정 task 개수 없이 단일 코어에서 process와 software thread를
 동적으로 생성하고 선점할 수 있어야 한다.
@@ -159,13 +159,15 @@ parent/child와 wait 가능한 zombie는 P1.3-B, process별 FD table은 P1.3-D,
 
 ### P1.3-E — sleep/wakeup과 interrupt 기반 비동기 I/O
 
-- [ ] scheduler wait queue, wake-one/wake-all과 timeout primitive
-- [ ] timer 기반 `sleep`과 BLOCKED thread가 없을 때의 idle/WAIT 경로
-- [ ] block driver의 early-boot polling과 scheduler 이후 IRQ mode 분리
-- [ ] block 완료 IRQ에서 요청별 waiter를 깨우고 오류를 호출자에게 전달
-- [ ] keyboard IRQ ring buffer와 blocking `read`
-- [ ] interrupt context에서 할당/수면하지 않는 IRQ-safe queue와 lock 규칙
-- [ ] IRQ-before-sleep, timeout-vs-completion과 wakeup 유실 경쟁 테스트
+- [x] scheduler wait queue, wake-one/wake-all과 timeout primitive
+- [x] timer 기반 `sleep`과 runnable thread가 없을 때의 idle/WAIT 경로
+- [x] block driver의 early-boot polling과 scheduler 이후 IRQ mode 분리
+- [x] block 완료 IRQ에서 요청별 waiter를 깨우고 오류를 호출자에게 전달
+- [x] keyboard IRQ ring buffer와 blocking `read`
+- [x] interrupt context에서 할당/수면하지 않는 IRQ-safe queue와 lock 규칙
+- [x] IRQ-before-sleep, timeout-vs-completion과 wakeup 유실 경쟁 테스트
+- [x] sleep 가능한 kernel continuation용 64KiB per-thread stack과 sibling user
+  fault 시 continuation 정리 후 process 종료 경계
 - [x] init 통합 실패를 `A`~`Z` 단계 코드로 분리하고 동일 persistent image
   반복 부팅으로 wait/join, 파일 syscall과 exec rollback/FD 유지 경로 확인
 
@@ -223,10 +225,10 @@ regular file을 읽고 생성·교체할 수 있어야 한다. 일반 파일시�
 - [x] `/BIN/INIT.EXF`가 부팅 후 PID 1 첫 process로 실행
 - [x] 여러 process와 process 내부 여러 thread가 선점 실행
 - [x] user fault가 해당 process에만 격리
-- [ ] file/keyboard/block I/O가 FD와 blocking syscall로 동작
+- [x] file/keyboard/block I/O가 FD와 blocking syscall로 동작
 - [x] process 종료 후 현재 PMM page, heap과 process/thread wait 상태 누수 없음
 - [x] process 종료와 exec에서 FD 참조/offset 소유권 유지 및 정리
-- [ ] 일반 wait queue 도입 뒤 waiter/timeout 자원 누수 없음
+- [x] 일반 wait queue 도입 뒤 waiter/timeout 자원 누수 없음
 - [x] 현재 단계 전체 unit test와 실제 GPT/FAT32+RMFS boot regression 통과
 
 ## P1.4 — SMP kernel과 hardware-thread 활용
@@ -337,7 +339,7 @@ version, object metadata, tool 진단과 호환성 테스트를 함께 변경한
 
 ## 바로 시작할 작업
 
-1. P1.3-E scheduler wait queue와 wake-one/wake-all primitive 구현
-2. timer 기반 `sleep`과 runnable thread가 없을 때 idle/`WAIT` 경로 구현
-3. block driver를 early-boot polling과 scheduler 이후 IRQ mode로 분리
-4. keyboard IRQ ring buffer와 blocking `read` 구현
+1. P1.3-F host window와 guest framebuffer mode API 설계
+2. checked 해상도/stride/buffer 크기와 PMM buffer 정책 구현
+3. process별 framebuffer mapping과 `present` syscall/API 구현
+4. mode 변경·process 종료·present IRQ 회귀 테스트

@@ -21,6 +21,10 @@ typedef struct {
 } KernelList;
 
 typedef struct {
+    KernelList waiters;
+} KernelWaitQueue;
+
+typedef struct {
     uint8_t *storage;
     size_t capacity;
     size_t head;
@@ -39,7 +43,7 @@ typedef struct {
 #define KERNEL_USER_IMAGE_LIMIT UINT64_C(0x3E000000)
 #define KERNEL_USER_STACK_TOP UINT64_C(0x3F000000)
 #define KERNEL_USER_STACK_SIZE UINT64_C(0x00010000)
-#define KERNEL_THREAD_KERNEL_STACK_SIZE ((size_t)0x00004000)
+#define KERNEL_THREAD_KERNEL_STACK_SIZE ((size_t)0x00010000)
 
 typedef struct KernelAddressSpace KernelAddressSpace;
 typedef struct KernelVnode KernelVnode;
@@ -99,6 +103,8 @@ struct KernelThread {
     KernelListNode process_node;
     KernelListNode run_node;
     KernelListNode reap_node;
+    KernelListNode wait_node;
+    KernelListNode timeout_node;
     KernelProcess *process;
     uint64_t registers[15];
     uint64_t pc;
@@ -116,9 +122,18 @@ struct KernelThread {
     uint64_t wait_tid;
     uintptr_t join_status_address;
     KernelThread *join_waiter;
+    KernelWaitQueue *wait_queue;
+    uint64_t wait_deadline;
+    int64_t wait_timeout_result;
+    uintptr_t wait_buffer_address;
+    size_t wait_buffer_size;
+    uintptr_t kernel_resume_sp;
+    uint64_t *active_trap_frame;
+    int64_t kernel_wait_result;
     KernelThreadState state;
     int queued;
     int reap_queued;
+    int timeout_queued;
 };
 
 void kernel_spin_init(KernelSpinLock *lock);

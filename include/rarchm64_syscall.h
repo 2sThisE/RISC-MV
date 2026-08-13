@@ -16,7 +16,8 @@ typedef enum {
     RARCHM64_SYS_CLOSE = 9,
     RARCHM64_SYS_SEEK = 10,
     RARCHM64_SYS_FSYNC = 11,
-    RARCHM64_SYS_EXEC = 12
+    RARCHM64_SYS_EXEC = 12,
+    RARCHM64_SYS_SLEEP = 13
 } RArchM64SyscallNumber;
 
 typedef enum {

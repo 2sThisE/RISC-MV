@@ -275,13 +275,15 @@ size_t kernel_fd_open_count(KernelFdTable *table)
 
 int64_t kernel_vfs_file_read(KernelOpenFile *file, void *buffer, size_t size)
 {
-    if (file == NULL || (buffer == NULL && size != 0)) return -1;
+    if (file == NULL || (buffer == NULL && size != 0)) {
+        return -KERNEL_ERROR_INVALID;
+    }
     kernel_spin_lock(&file->lock);
     if ((file->flags & KERNEL_VFS_OPEN_READ) == 0 || file->vnode == NULL) {
         kernel_spin_unlock(&file->lock);
-        return -1;
+        return -KERNEL_ERROR_ACCESS;
     }
-    int64_t result = -1;
+    int64_t result = -KERNEL_ERROR_IO;
     if (file->vnode->kind == KERNEL_VNODE_KEYBOARD) {
         if (size == 0) {
             result = 0;
@@ -313,11 +315,13 @@ int64_t kernel_vfs_file_write(KernelOpenFile *file,
                               const void *buffer,
                               size_t size)
 {
-    if (file == NULL || (buffer == NULL && size != 0)) return -1;
+    if (file == NULL || (buffer == NULL && size != 0)) {
+        return -KERNEL_ERROR_INVALID;
+    }
     kernel_spin_lock(&file->lock);
     if ((file->flags & KERNEL_VFS_OPEN_WRITE) == 0 || file->vnode == NULL) {
         kernel_spin_unlock(&file->lock);
-        return -1;
+        return -KERNEL_ERROR_ACCESS;
     }
     if (size == 0) {
         kernel_spin_unlock(&file->lock);
@@ -327,7 +331,7 @@ int64_t kernel_vfs_file_write(KernelOpenFile *file,
         (file->flags & KERNEL_VFS_OPEN_APPEND) != 0) {
         file->offset = file->vnode->size;
     }
-    int64_t result = -1;
+    int64_t result = -KERNEL_ERROR_IO;
     if (file->vnode->kind == KERNEL_VNODE_UART) {
         const uint8_t *input = buffer;
         for (size_t i = 0; i < size; ++i) {
@@ -391,6 +395,13 @@ int kernel_vfs_file_sync(KernelOpenFile *file)
                   file->vnode->kind == KERNEL_VNODE_REGULAR;
     kernel_spin_unlock(&file->lock);
     return regular && kernel_vfs_sync();
+}
+
+KernelVnodeKind kernel_vfs_file_kind(KernelOpenFile *file)
+{
+    if (file == NULL || file->vnode == NULL) return KERNEL_VNODE_REGULAR;
+    /* vnode and its kind are immutable for the lifetime of an open file. */
+    return file->vnode->kind;
 }
 
 int kernel_fd_populate_standard(KernelFdTable *table)

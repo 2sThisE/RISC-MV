@@ -282,6 +282,7 @@ int kernel_thread_set_startup(KernelThread *thread,
 int kernel_thread_destroy(KernelThread *thread)
 {
     if (thread == NULL || thread->process == NULL || thread->queued ||
+        thread->wait_queue != NULL || thread->timeout_queued ||
         (thread->state != KERNEL_THREAD_ZOMBIE &&
          thread->state != KERNEL_THREAD_DEAD)) {
         return 1;

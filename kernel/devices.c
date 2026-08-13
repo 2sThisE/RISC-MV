@@ -12,6 +12,8 @@
 
 #define KERNEL_DEVICE_SLOT_COUNT 16U
 #define KERNEL_BLOCK_WAIT_LIMIT UINT64_C(20000000)
+#define KERNEL_BLOCK_TIMEOUT_TICKS UINT64_C(5000)
+#define KERNEL_KEYBOARD_BUFFER_CAPACITY 256U
 
 typedef struct {
     int present;
@@ -30,8 +32,63 @@ static uint8_t *kernel_block_dma_virtual;
 static uint64_t kernel_block_sector_capacity;
 static int kernel_block_is_read_only;
 static KernelSpinLock kernel_block_lock;
+static KernelWaitQueue kernel_block_waiters;
+static KernelWaitQueue kernel_keyboard_waiters;
+static uint8_t kernel_keyboard_buffer[KERNEL_KEYBOARD_BUFFER_CAPACITY];
+static size_t kernel_keyboard_head;
+static size_t kernel_keyboard_length;
+static volatile int kernel_device_interrupts_enabled;
+static volatile int kernel_block_request_pending;
+static volatile int kernel_block_request_success;
+static volatile uint64_t kernel_block_request_error;
+static size_t kernel_block_irq_wait_count;
+static size_t kernel_block_irq_completion_count;
 static uintptr_t kernel_display_buffer_physical;
 static uint32_t *kernel_display_buffer_virtual;
+
+static int block_request_begin(void)
+{
+    if (kernel_block_request_pending) return 0;
+    kernel_block_request_success = 0;
+    kernel_block_request_error = VM_BLOCK_ERROR_NONE;
+    kernel_block_request_pending = 1;
+    return 1;
+}
+
+static int block_request_complete(uint64_t irq,
+                                  uint64_t status,
+                                  uint64_t error)
+{
+    if (!kernel_block_request_pending) return 0;
+    kernel_block_request_error = error;
+    kernel_block_request_success =
+        (irq & VM_BLOCK_IRQ_COMPLETE) != 0 &&
+        (irq & VM_BLOCK_IRQ_ERROR) == 0 &&
+        (status & VM_BLOCK_STATUS_ERROR) == 0;
+    kernel_block_request_pending = 0;
+    ++kernel_block_irq_completion_count;
+    return 1;
+}
+
+static int keyboard_buffer_push(uint8_t byte)
+{
+    if (kernel_keyboard_length == KERNEL_KEYBOARD_BUFFER_CAPACITY) return 0;
+    size_t tail = (kernel_keyboard_head + kernel_keyboard_length) %
+                  KERNEL_KEYBOARD_BUFFER_CAPACITY;
+    kernel_keyboard_buffer[tail] = byte;
+    ++kernel_keyboard_length;
+    return 1;
+}
+
+static int keyboard_buffer_pop(uint8_t *byte)
+{
+    if (byte == NULL || kernel_keyboard_length == 0) return 0;
+    *byte = kernel_keyboard_buffer[kernel_keyboard_head];
+    kernel_keyboard_head = (kernel_keyboard_head + 1U) %
+                           KERNEL_KEYBOARD_BUFFER_CAPACITY;
+    --kernel_keyboard_length;
+    return 1;
+}
 
 static int map_mmio_range(uintptr_t alias,
                           uintptr_t physical,
@@ -114,6 +171,20 @@ static int discover_devices(void)
 static int block_wait(void)
 {
     if (kernel_block_device == NULL) return 0;
+    if (kernel_device_interrupts_enabled) {
+        ++kernel_block_irq_wait_count;
+        int64_t wake_result;
+        if (kernel_scheduler_block_kernel(&kernel_block_waiters,
+                                          KERNEL_BLOCK_TIMEOUT_TICKS,
+                                          -KERNEL_ERROR_IO,
+                                          &wake_result) != 0 ||
+            wake_result != 0) {
+            kernel_block_request_success = 0;
+            kernel_block_request_error = VM_BLOCK_ERROR_IO;
+            return 0;
+        }
+        return kernel_block_request_success;
+    }
     for (uint64_t wait = 0; wait < KERNEL_BLOCK_WAIT_LIMIT; ++wait) {
         uint64_t status = cvm_mmio_read64(
             kernel_block_device->bar + VM_BLOCK_STATUS_OFFSET);
@@ -131,6 +202,15 @@ static int block_command(uint64_t command,
     if (kernel_block_device == NULL ||
         sector_count > (size_t)(KERNEL_PAGE_SIZE / VM_BLOCK_SECTOR_SIZE)) {
         return 0;
+    }
+    if (kernel_device_interrupts_enabled) {
+        /* A timed-out command still belongs to the device until its IRQ is
+         * acknowledged.  Do not let a late completion satisfy a newer
+         * request that happens to reuse the single controller queue. */
+        if (kernel_block_request_pending) return 0;
+        cvm_mmio_write64(kernel_block_device->bar + VM_BLOCK_IRQ_ACK_OFFSET,
+                         VM_BLOCK_IRQ_COMPLETE | VM_BLOCK_IRQ_ERROR);
+        if (!block_request_begin()) return 0;
     }
     cvm_mmio_write64(kernel_block_device->bar + VM_BLOCK_LBA_OFFSET, lba);
     cvm_mmio_write64(kernel_block_device->bar +
@@ -187,9 +267,7 @@ int kernel_block_flush(void)
 {
     if (kernel_block_device == NULL) return 0;
     kernel_spin_lock(&kernel_block_lock);
-    cvm_mmio_write64(kernel_block_device->bar + VM_BLOCK_COMMAND_OFFSET,
-                     VM_BLOCK_COMMAND_FLUSH);
-    int okay = block_wait();
+    int okay = block_command(VM_BLOCK_COMMAND_FLUSH, 0, 0);
     kernel_spin_unlock(&kernel_block_lock);
     return okay;
 }
@@ -206,7 +284,13 @@ int kernel_block_read_only(void)
 
 int kernel_keyboard_poll(uint64_t *event)
 {
-    if (kernel_keyboard_device == NULL || event == NULL ||
+    if (event == NULL) return 0;
+    uint8_t byte;
+    if (keyboard_buffer_pop(&byte)) {
+        *event = byte;
+        return 1;
+    }
+    if (kernel_keyboard_device == NULL ||
         cvm_mmio_read64(kernel_keyboard_device->bar +
                         VM_KEYBOARD_EVENT_COUNT_OFFSET) == 0) {
         return 0;
@@ -214,6 +298,145 @@ int kernel_keyboard_poll(uint64_t *event)
     *event = cvm_mmio_read64(kernel_keyboard_device->bar +
                              VM_KEYBOARD_EVENT_DATA_OFFSET);
     return 1;
+}
+
+int kernel_keyboard_read(uint64_t *frame,
+                         uintptr_t user_buffer,
+                         size_t size,
+                         int64_t *result)
+{
+    KernelAddressSpace *space = kernel_scheduler_current_space();
+    size_t capacity = size < 64U ? size : 64U;
+    if (result == NULL || frame == NULL || space == NULL || capacity == 0 ||
+        !kernel_user_buffer_writable(space, user_buffer, capacity)) {
+        if (result != NULL) *result = -KERNEL_ERROR_FAULT;
+        return 1;
+    }
+    uint8_t bytes[64];
+    size_t count = 0;
+    while (count < capacity && keyboard_buffer_pop(&bytes[count])) {
+        ++count;
+    }
+    if (count != 0) {
+        if (!kernel_copy_to_user(space, user_buffer, bytes, count)) {
+            *result = -KERNEL_ERROR_FAULT;
+        } else {
+            *result = (int64_t)count;
+        }
+        return 1;
+    }
+    if (kernel_scheduler_block_read(frame, &kernel_keyboard_waiters,
+                                    user_buffer, capacity) != 0) {
+        *result = -KERNEL_ERROR_AGAIN;
+        return 1;
+    }
+    return 0;
+}
+
+static void keyboard_deliver_event(uint64_t event)
+{
+    uint8_t byte = (uint8_t)(event & VM_KEYBOARD_EVENT_USAGE_MASK);
+    if (kernel_wait_queue_wake_read_one(&kernel_keyboard_waiters,
+                                        &byte, 1) != 0) {
+        return;
+    }
+    (void)keyboard_buffer_push(byte);
+}
+
+static void handle_block_interrupt(void)
+{
+    uintptr_t bar = kernel_block_device->bar;
+    uint64_t irq = cvm_mmio_read64(bar + VM_BLOCK_IRQ_STATUS_OFFSET);
+    uint64_t status = cvm_mmio_read64(bar + VM_BLOCK_STATUS_OFFSET);
+    uint64_t error = cvm_mmio_read64(bar + VM_BLOCK_ERROR_OFFSET);
+    cvm_mmio_write64(bar + VM_BLOCK_IRQ_ACK_OFFSET,
+                     irq & (VM_BLOCK_IRQ_COMPLETE | VM_BLOCK_IRQ_ERROR));
+    if (block_request_complete(irq, status, error)) {
+        (void)kernel_wait_queue_wake_one(
+            &kernel_block_waiters,
+            kernel_block_request_success ? 0 : -KERNEL_ERROR_IO);
+    }
+}
+
+static void handle_keyboard_interrupt(void)
+{
+    uintptr_t bar = kernel_keyboard_device->bar;
+    uint64_t irq = cvm_mmio_read64(bar + VM_KEYBOARD_IRQ_STATUS_OFFSET);
+    while (cvm_mmio_read64(bar + VM_KEYBOARD_EVENT_COUNT_OFFSET) != 0) {
+        keyboard_deliver_event(
+            cvm_mmio_read64(bar + VM_KEYBOARD_EVENT_DATA_OFFSET));
+    }
+    cvm_mmio_write64(bar + VM_KEYBOARD_IRQ_STATUS_OFFSET,
+                     irq & (VM_KEYBOARD_IRQ_EVENT |
+                            VM_KEYBOARD_IRQ_OVERFLOW));
+}
+
+void kernel_devices_interrupt(uint64_t *frame)
+{
+    uint64_t active = cvm_mmio_read64((uintptr_t)KERNEL_IRQ_ALIAS +
+                                      IRQ_CONTROLLER_ACTIVE_OFFSET);
+    uint32_t line = UINT32_MAX;
+    for (uint32_t candidate = 1; candidate < 64U; ++candidate) {
+        if ((active & (UINT64_C(1) << candidate)) != 0) {
+            line = candidate;
+            break;
+        }
+    }
+    if (kernel_block_device != NULL && line == kernel_block_device->irq) {
+        handle_block_interrupt();
+    } else if (kernel_keyboard_device != NULL &&
+               line == kernel_keyboard_device->irq) {
+        handle_keyboard_interrupt();
+    }
+    if (line != UINT32_MAX) {
+        cvm_mmio_write64((uintptr_t)KERNEL_IRQ_ALIAS +
+                         IRQ_CONTROLLER_EOI_OFFSET, line);
+    }
+    kernel_scheduler_interrupt_return(frame);
+}
+
+int kernel_devices_enable_interrupts(void)
+{
+    if (kernel_block_device == NULL || kernel_keyboard_device == NULL ||
+        kernel_block_device->irq >= 64U || kernel_keyboard_device->irq >= 64U ||
+        kernel_block_device->irq == kernel_keyboard_device->irq) {
+        return 0;
+    }
+    cvm_mmio_write64(kernel_block_device->bar + VM_BLOCK_IRQ_ACK_OFFSET,
+                     VM_BLOCK_IRQ_COMPLETE | VM_BLOCK_IRQ_ERROR);
+    cvm_mmio_write64(kernel_keyboard_device->bar +
+                     VM_KEYBOARD_IRQ_STATUS_OFFSET,
+                     VM_KEYBOARD_IRQ_EVENT | VM_KEYBOARD_IRQ_OVERFLOW);
+    cvm_mmio_write64(kernel_block_device->bar + VM_BLOCK_CONTROL_OFFSET,
+                     VM_BLOCK_CONTROL_IRQ_ENABLE);
+    cvm_mmio_write64(kernel_keyboard_device->bar +
+                     VM_KEYBOARD_CONTROL_OFFSET,
+                     VM_KEYBOARD_CONTROL_ENABLE |
+                         VM_KEYBOARD_CONTROL_IRQ_ENABLE);
+    while (cvm_mmio_read64(kernel_keyboard_device->bar +
+                           VM_KEYBOARD_EVENT_COUNT_OFFSET) != 0) {
+        keyboard_deliver_event(cvm_mmio_read64(
+            kernel_keyboard_device->bar + VM_KEYBOARD_EVENT_DATA_OFFSET));
+    }
+    uint64_t mask = (UINT64_C(1) << kernel_block_device->irq) |
+                    (UINT64_C(1) << kernel_keyboard_device->irq);
+    cvm_mmio_write64((uintptr_t)KERNEL_IRQ_ALIAS +
+                     IRQ_CONTROLLER_ENABLE_SET_OFFSET, mask);
+    if (cvm_mmio_read64((uintptr_t)KERNEL_IRQ_ALIAS +
+                        IRQ_CONTROLLER_RESULT_OFFSET) !=
+        IRQ_CONTROLLER_RESULT_SUCCESS) {
+        return 0;
+    }
+    kernel_device_interrupts_enabled = 1;
+    return 1;
+}
+
+int kernel_devices_runtime_valid(void)
+{
+    return kernel_device_interrupts_enabled &&
+           !kernel_block_request_pending &&
+           kernel_block_irq_wait_count != 0 &&
+           kernel_block_irq_wait_count == kernel_block_irq_completion_count;
 }
 
 int kernel_display_present_test_pattern(void)
@@ -257,6 +480,16 @@ int kernel_devices_init(void)
     kernel_block_device = NULL;
     kernel_keyboard_device = NULL;
     kernel_display_device = NULL;
+    kernel_device_interrupts_enabled = 0;
+    kernel_block_request_pending = 0;
+    kernel_block_request_success = 0;
+    kernel_block_request_error = VM_BLOCK_ERROR_NONE;
+    kernel_block_irq_wait_count = 0;
+    kernel_block_irq_completion_count = 0;
+    kernel_keyboard_head = 0;
+    kernel_keyboard_length = 0;
+    kernel_wait_queue_init(&kernel_keyboard_waiters);
+    kernel_wait_queue_init(&kernel_block_waiters);
     cvm_mmio_write64((uintptr_t)KERNEL_UART_ALIAS + UART_CONTROL_OFFSET,
                      UART_CONTROL_ENABLE);
     if (!map_mmio_range((uintptr_t)KERNEL_IRQ_ALIAS,
@@ -309,6 +542,67 @@ int kernel_devices_init(void)
 
 int kernel_devices_self_test(void)
 {
+    /* A timeout must keep ownership of the depth-one device queue until the
+     * original command's late completion arrives.  Only then may a new
+     * request begin; an error completion must remain distinguishable. */
+    int saved_pending = kernel_block_request_pending;
+    int saved_success = kernel_block_request_success;
+    uint64_t saved_error = kernel_block_request_error;
+    size_t saved_completion_count = kernel_block_irq_completion_count;
+    kernel_block_request_pending = 0;
+    kernel_block_request_success = 0;
+    kernel_block_request_error = VM_BLOCK_ERROR_NONE;
+    kernel_block_irq_completion_count = 0;
+    int block_state_ok =
+        block_request_begin() && kernel_block_request_pending &&
+        !block_request_begin();
+    kernel_block_request_success = 0;
+    kernel_block_request_error = VM_BLOCK_ERROR_IO;
+    block_state_ok = block_state_ok && kernel_block_request_pending &&
+        !block_request_begin() &&
+        block_request_complete(VM_BLOCK_IRQ_COMPLETE,
+                               VM_BLOCK_STATUS_DONE,
+                               VM_BLOCK_ERROR_NONE) &&
+        !kernel_block_request_pending && kernel_block_request_success &&
+        kernel_block_irq_completion_count == 1 && block_request_begin() &&
+        block_request_complete(VM_BLOCK_IRQ_ERROR,
+                               VM_BLOCK_STATUS_ERROR,
+                               VM_BLOCK_ERROR_IO) &&
+        !kernel_block_request_success &&
+        kernel_block_request_error == VM_BLOCK_ERROR_IO &&
+        kernel_block_irq_completion_count == 2;
+    kernel_block_request_pending = saved_pending;
+    kernel_block_request_success = saved_success;
+    kernel_block_request_error = saved_error;
+    kernel_block_irq_completion_count = saved_completion_count;
+    if (!block_state_ok) return 1;
+
+    /* Exercise a full ring, overflow rejection, wraparound, and FIFO order.
+     * Runtime producers execute in the IRQ path and consumers execute while
+     * the trap path has interrupts masked on the current single-core kernel. */
+    kernel_keyboard_head = 0;
+    kernel_keyboard_length = 0;
+    for (size_t i = 0; i < KERNEL_KEYBOARD_BUFFER_CAPACITY; ++i) {
+        if (!keyboard_buffer_push((uint8_t)i)) return 1;
+    }
+    if (keyboard_buffer_push(0xFF)) return 1;
+    uint8_t byte;
+    for (size_t i = 0; i < KERNEL_KEYBOARD_BUFFER_CAPACITY / 2U; ++i) {
+        if (!keyboard_buffer_pop(&byte) || byte != (uint8_t)i) return 1;
+    }
+    for (size_t i = 0; i < KERNEL_KEYBOARD_BUFFER_CAPACITY / 2U; ++i) {
+        if (!keyboard_buffer_push((uint8_t)i)) return 1;
+    }
+    for (size_t i = KERNEL_KEYBOARD_BUFFER_CAPACITY / 2U;
+         i < KERNEL_KEYBOARD_BUFFER_CAPACITY; ++i) {
+        if (!keyboard_buffer_pop(&byte) || byte != (uint8_t)i) return 1;
+    }
+    for (size_t i = 0; i < KERNEL_KEYBOARD_BUFFER_CAPACITY / 2U; ++i) {
+        if (!keyboard_buffer_pop(&byte) || byte != (uint8_t)i) return 1;
+    }
+    if (keyboard_buffer_pop(&byte) || kernel_keyboard_length != 0) return 1;
+    kernel_keyboard_head = 0;
+
     uint8_t sector[512];
     if (!kernel_block_read(1, sector, 1)) return 1;
     static const uint8_t gpt_magic[8] = {

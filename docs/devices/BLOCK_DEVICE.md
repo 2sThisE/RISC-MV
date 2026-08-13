@@ -112,6 +112,15 @@ cross-platform host event를 signal하고, worker는 요청이 없을 때 event�
 
 완료되면 `STATUS`가 `DONE` 또는 `ERROR`가 되고, IRQ가 활성화됐다면 할당된 IRQ를 발생시킨다. 현재 queue depth는 1이다. `BUSY` 중 새 명령을 제출하면 진행 중 요청은 유지되고 `BUSY` 오류 IRQ가 기록된다.
 
+reference kernel은 scheduler 시작 전에는 bounded `STATUS` polling을 사용한다.
+scheduler 시작 뒤에는 control bit 0과 IRQ controller line을 켜고 요청별 wait
+queue에서 잠든다. 완료 handler는 `IRQ_STATUS`, `STATUS`, `ERROR`를 읽고 W1C ACK와
+controller EOI를 수행한 뒤 정확히 한 waiter를 깨운다. 오류 또는 timer timeout은
+kernel I/O 실패로 호출자까지 전달되며 late completion은 waiter를 중복으로
+runnable 상태로 만들지 않는다. timeout 뒤에도 장치가 원래 요청을 소유하는
+동안에는 새 요청을 거부하고, 늦은 완료 IRQ를 ACK해 pending 상태를 해제한 뒤에만
+다음 요청을 시작한다. 이전 요청의 완료가 새 요청 성공으로 잘못 전달되지 않는다.
+
 LBA 범위는 `count <= capacity - lba` 형태로 검사하여 덧셈 overflow를 피한다. DMA는 Device Manager가 일반 물리 RAM 범위를 다시 검사하며 MMIO 주소에는 DMA할 수 없다.
 
 `FLUSH`는 C stream을 비우고 Windows에서는 `_commit`, POSIX에서는 `fsync`까지 호출한다. 일반 WRITE 완료는 호스트 캐시에 기록됐음을 의미하며 영구 저장 경계가 필요할 때 게스트가 FLUSH를 명시해야 한다.

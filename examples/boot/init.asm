@@ -36,17 +36,6 @@ init_entry:
     CMP R7, R11
     BRCC NE, init_failed
 
-    MOVI32U R13, 69
-    MOVI32U R0, 7
-    MOV R1, R10
-    SYSCALL
-    CMP R0, R10
-    BRCC NE, init_failed
-    MOVI32U R13, 70
-    LOAD64 R7, R2
-    CMPI32 R7, 0
-    BRCC NE, init_failed
-
     MOVI32U R13, 71
     MOVI32U R0, 8
     MOVI64 R1, init_test_path
@@ -81,6 +70,22 @@ init_entry:
     MOVI32U R13, 75
     LOAD8UO R7, R2, 1
     CMPI32 R7, 77
+    BRCC NE, init_failed
+
+    ; Keep the worker runnable across the first RMFS read. The block IRQ must
+    ; suspend this syscall's kernel continuation, run the worker, and resume
+    ; here before join collects it.
+    MOVI32U R13, 69
+    MOV R2, SP
+    ADDI32 R2, -8
+    MOVI32U R0, 7
+    MOV R1, R10
+    SYSCALL
+    CMP R0, R10
+    BRCC NE, init_failed
+    MOVI32U R13, 70
+    LOAD64 R7, R2
+    CMPI32 R7, 0
     BRCC NE, init_failed
 
     MOVI32U R13, 76
@@ -200,6 +205,14 @@ init_execed:
     CMPI32 R5, 69
     BRCC NE, init_failed
 
+    ; With every other user thread gone, this must enter the scheduler's
+    ; hardware WAIT idle path and resume only after a timer timeout.
+    MOVI32U R0, 13
+    MOVI32U R1, 4
+    SYSCALL
+    CMPI32 R0, 0
+    BRCC NE, init_failed
+
     MOVI32U R13, 89
     MOVI32U R0, 10
     MOVI32U R1, 3
@@ -242,7 +255,7 @@ init_execed:
 init_worker:
     MOVI32U R0, 3
     SYSCALL
-    MOVI32U R8, 500000
+    MOVI32U R8, 5000000
 init_worker_loop:
     ADDI32 R8, -1
     CMPI32 R8, 0

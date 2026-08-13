@@ -11,6 +11,13 @@
 .global kernel_page_fault_entry
 .global kernel_syscall_entry
 .global kernel_timer_entry
+.global kernel_device_irq_entry
+.global kernel_idle_wait
+.global kernel_idle_wait_instruction
+.global kernel_idle_wait_resume
+.global kernel_suspend_to_user
+.global kernel_switch_continuation
+.global kernel_resume_continuation
 .global kernel_start_user
 .global kernel_probe_null_load
 .global kernel_probe_rodata_store
@@ -26,6 +33,7 @@
 .extern kernel_exception_panic
 .extern kernel_syscall_dispatch
 .extern kernel_scheduler_timer
+.extern kernel_devices_interrupt
 .extern kernel_stack_top
 .type kernel_main, function
 .type kernel_exception_dispatch, function
@@ -138,6 +146,28 @@ kernel_timer_entry:
     MOV R0, SP
     CALLREL kernel_scheduler_timer
 
+    JUMPREL kernel_trap_restore
+
+kernel_device_irq_entry:
+    PUSH R0
+    PUSH R1
+    PUSH R2
+    PUSH R3
+    PUSH R4
+    PUSH R5
+    PUSH R6
+    PUSH R7
+    PUSH R8
+    PUSH R9
+    PUSH R10
+    PUSH R11
+    PUSH R12
+    PUSH R13
+    PUSH R14
+    ADDI32 SP, -8
+    MOV R0, SP
+    CALLREL kernel_devices_interrupt
+
 kernel_trap_restore:
     ADDI32 SP, 8
     POP R14
@@ -156,6 +186,119 @@ kernel_trap_restore:
     POP R1
     POP R0
     IRET
+
+; Enter the hardware WAIT state without losing an IRQ delivered immediately
+; after EI. The timer handler redirects a frame whose return PC still points
+; at kernel_idle_wait_instruction to kernel_idle_wait_resume.
+kernel_idle_wait:
+    EI
+kernel_idle_wait_instruction:
+    WAIT
+kernel_idle_wait_resume:
+    DI
+    RET
+
+; Preserve a blocking syscall's complete C stack, then enter a thread that
+; currently has only a saved user context. A later resume restores the saved
+; SP and RETs to the instruction after this call.
+kernel_suspend_to_user:
+    PUSH R0
+    PUSH R1
+    PUSH R2
+    PUSH R3
+    PUSH R4
+    PUSH R5
+    PUSH R6
+    PUSH R7
+    PUSH R8
+    PUSH R9
+    PUSH R10
+    PUSH R11
+    PUSH R12
+    PUSH R13
+    PUSH R14
+    STORE64 R0, SP
+    SETPTBR R1
+    SETKSP R4
+    MOV SP, R4
+    PUSH R3
+    MOVI64 R14, 0x4000000000000010
+    PUSH R14
+    PUSH R2
+    MOV R11, R5
+    LOAD64O R0, R11, 0
+    LOAD64O R1, R11, 8
+    LOAD64O R2, R11, 16
+    LOAD64O R3, R11, 24
+    LOAD64O R4, R11, 32
+    LOAD64O R5, R11, 40
+    LOAD64O R6, R11, 48
+    LOAD64O R7, R11, 56
+    LOAD64O R8, R11, 64
+    LOAD64O R9, R11, 72
+    LOAD64O R10, R11, 80
+    LOAD64O R13, R11, 104
+    LOAD64O R14, R11, 112
+    LOAD64O R12, R11, 96
+    LOAD64O R11, R11, 88
+    IRET
+    HALT
+
+; Both sides have a suspended kernel continuation.
+kernel_switch_continuation:
+    PUSH R0
+    PUSH R1
+    PUSH R2
+    PUSH R3
+    PUSH R4
+    PUSH R5
+    PUSH R6
+    PUSH R7
+    PUSH R8
+    PUSH R9
+    PUSH R10
+    PUSH R11
+    PUSH R12
+    PUSH R13
+    PUSH R14
+    STORE64 R0, SP
+    MOV SP, R1
+    POP R14
+    POP R13
+    POP R12
+    POP R11
+    POP R10
+    POP R9
+    POP R8
+    POP R7
+    POP R6
+    POP R5
+    POP R4
+    POP R3
+    POP R2
+    POP R1
+    POP R0
+    RET
+
+; Enter a suspended kernel continuation from a user trap scheduler path.
+kernel_resume_continuation:
+    MOV SP, R0
+    POP R14
+    POP R13
+    POP R12
+    POP R11
+    POP R10
+    POP R9
+    POP R8
+    POP R7
+    POP R6
+    POP R5
+    POP R4
+    POP R3
+    POP R2
+    POP R1
+    POP R0
+    RET
 
 ; R0=root, R1=entry, R2=user SP, R3=kernel SP, R4=initial R0..R14 array.
 ; Kernel mappings are shared by every user address space, so execution remains

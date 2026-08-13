@@ -137,6 +137,7 @@ reference kernel이 현재 사용하는 초기 syscall 번호는 다음과 같�
 | 10 | `seek` | `R1=fd`, `R2=signed_offset`, `R3=whence` |
 | 11 | `fsync` | `R1=fd` |
 | 12 | `exec` | `R1=path`, `R2=argv`, `R3=envp` |
+| 13 | `sleep` | `R1=milliseconds` |
 
 `open`의 flags bit 0은 read, bit 1은 write, bit 2는 append이며 최소 read 또는
 write 하나가 필요하다. append는 write와 함께 써야 하고 각 write 직전에 현재
@@ -157,6 +158,13 @@ regular file의 `write`는 RMFS transaction group에 변경을 누적하며 `clo
 먼저 거부하고, 접근하는 모든 user page의 read 또는 write 권한을 검사한다.
 경로 복사도 매 바이트 주소 덧셈과 page 권한을 검사하며 NUL 없는 128바이트
 경로는 거부한다.
+
+FD 0의 keyboard `read`는 입력이 없으면 호출 thread를 `BLOCKED`로 전환하고
+keyboard IRQ가 도착할 때까지 반환하지 않는다. 반환 데이터는 아직 문자나
+UTF-8이 아니라 각 event의 8-bit HID usage이며 한 번에 최대 64바이트를
+전달한다. regular-file `read`/`write`/`fsync`는 block IRQ를 기다리는 동안
+kernel continuation을 보존하고 다른 runnable thread를 실행한다. 장치 오류와
+timeout은 `-EIO`로 전달된다.
 
 `exec`의 `argv`와 `envp`는 각각 NULL로 끝나는 user pointer 배열이며 배열
 자체를 0으로 넘기면 빈 목록으로 취급한다. 각 목록은 최대 32개, 두 목록의
@@ -203,8 +211,12 @@ signed 64비트 exit status를 기록한다. 주소 0은 status를 버린다는 
 성공 시 대상 TID를 반환하고 선택적인 `status_address`에 signed 64비트 thread
 exit status를 기록한다. 대상은 한 번만 join할 수 있다. self-join은 `-EDEADLK`,
 이미 waiter가 있는 대상은 `-EBUSY`, 잘못되었거나 이미 수거된 TID는 `-EINVAL`을
-반환한다. 실행 가능한 다른 thread 없이 대기해야 하는 경우는 idle 경로가
-구현될 때까지 `-EAGAIN`이다.
+반환한다.
+
+`sleep`은 호출 thread를 지정한 밀리초 이상 `BLOCKED`로 만들고 timer IRQ에서
+다시 `RUNNABLE`로 전환한다. 0은 즉시 성공한다. 양수 시간은 현재 2ms timer
+quantum의 다음 tick으로 올림하며, 대기 중 실행 가능한 thread가 없으면 CPU는
+hardware `WAIT` 상태에 들어간다. 반환값은 성공 시 0이다.
 
 IRQ·동기 예외 핸들러는 일반 함수 ABI가 아니다. CPU 예외 프레임은 ISA
 문서를 따르며 `IRET` 대상의 레지스터가 필요하면 핸들러가 직접 보존한다.

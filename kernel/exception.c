@@ -38,6 +38,9 @@ int kernel_exception_init(void)
         (uint64_t)(uintptr_t)kernel_syscall_entry;
     vectors[KERNEL_TIMER_INTERRUPT_LINE] =
         (uint64_t)(uintptr_t)kernel_timer_entry;
+    for (size_t i = 1; i < KERNEL_VECTOR_EXCEPTION_BASE; ++i) {
+        vectors[i] = (uint64_t)(uintptr_t)kernel_device_irq_entry;
+    }
 
     cvm_set_vbr((uint64_t)kernel_vbr);
     if (cvm_get_vbr() != (uint64_t)kernel_vbr) return 1;

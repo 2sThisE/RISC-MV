@@ -78,3 +78,9 @@ modifier 비트는 왼쪽 Ctrl, Shift, Alt, GUI와 오른쪽 Ctrl, Shift, Alt, G
 5. IRQ Controller의 `EOI`에 할당된 IRQ 번호를 기록한다.
 
 새 이벤트이지만 IRQ pending bit가 이미 설정된 경우에도 이벤트는 큐에 보존되므로 드라이버는 한 번의 인터럽트에서 큐를 전부 비워야 한다.
+
+reference kernel handler도 이 순서를 따르고 장치 queue를 고정 256-byte kernel
+ring으로 drain한다. FD 0 `read`에 대기 중인 thread가 있으면 가장 오래 기다린
+thread를 먼저 깨우며, 없으면 ring에 보관한다. 조건 확인과 waiter 등록은
+interrupt-disabled syscall 경계에서 이루어져 event가 그 사이에 도착해 사라지는
+경쟁이 없다. 현재 FD ABI는 event의 하위 8-bit HID usage만 전달한다.

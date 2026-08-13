@@ -9,6 +9,42 @@
 #define TRAP_REGISTER(frame, reg) ((frame)[15U - (reg)])
 #define KERNEL_UINTPTR_MAX ((uintptr_t)-1)
 
+typedef struct {
+    KernelWaitQueue waiters;
+    int locked;
+} KernelSyscallGate;
+
+static KernelSyscallGate filesystem_gate;
+
+static int syscall_gate_lock(KernelSyscallGate *gate)
+{
+    if (gate == NULL) return 0;
+    while (gate->locked) {
+        int64_t wake_result;
+        if (kernel_scheduler_block_kernel(&gate->waiters, 0, 0,
+                                          &wake_result) != 0 ||
+            wake_result != 0) {
+            return 0;
+        }
+    }
+    gate->locked = 1;
+    return 1;
+}
+
+static void syscall_gate_unlock(KernelSyscallGate *gate)
+{
+    if (gate == NULL || !gate->locked) return;
+    gate->locked = 0;
+    (void)kernel_wait_queue_wake_one(&gate->waiters, 0);
+}
+
+static int64_t syscall_regular_gate_result(KernelVnodeKind kind,
+                                           int gate_acquired)
+{
+    if (kind != KERNEL_VNODE_REGULAR) return -KERNEL_ERROR_INVALID;
+    return gate_acquired ? 0 : -KERNEL_ERROR_AGAIN;
+}
+
 static int user_buffer_bounds_valid(uintptr_t address, size_t size)
 {
     return size <= (size_t)INT64_MAX &&
@@ -94,6 +130,14 @@ int kernel_copy_to_user(const KernelAddressSpace *space,
     return 1;
 }
 
+int kernel_user_buffer_writable(const KernelAddressSpace *space,
+                                uintptr_t destination,
+                                size_t size)
+{
+    return user_range_valid(space, destination, size,
+                            KERNEL_PTE_READ | KERNEL_PTE_WRITE);
+}
+
 static int64_t syscall_write(uint64_t fd, uintptr_t user_buffer, size_t size)
 {
     KernelAddressSpace *space = kernel_scheduler_current_space();
@@ -104,6 +148,11 @@ static int64_t syscall_write(uint64_t fd, uintptr_t user_buffer, size_t size)
     if (fd >= KERNEL_FD_LIMIT || table == NULL) return -KERNEL_ERROR_BAD_FD;
     KernelOpenFile *file = kernel_fd_acquire(table, (int)fd);
     if (file == NULL) return -KERNEL_ERROR_BAD_FD;
+    int regular = kernel_vfs_file_kind(file) == KERNEL_VNODE_REGULAR;
+    if (regular && !syscall_gate_lock(&filesystem_gate)) {
+        kernel_vfs_file_release(file);
+        return -KERNEL_ERROR_AGAIN;
+    }
     uint8_t buffer[64];
     size_t written = 0;
     while (written < size) {
@@ -111,32 +160,61 @@ static int64_t syscall_write(uint64_t fd, uintptr_t user_buffer, size_t size)
         if (chunk > sizeof(buffer)) chunk = sizeof(buffer);
         if (!kernel_copy_from_user(space, buffer,
                                    user_buffer + written, chunk)) {
+            if (regular) syscall_gate_unlock(&filesystem_gate);
             kernel_vfs_file_release(file);
             return -KERNEL_ERROR_FAULT;
         }
         int64_t result = kernel_vfs_file_write(file, buffer, chunk);
         if (result < 0) {
+            if (regular) syscall_gate_unlock(&filesystem_gate);
             kernel_vfs_file_release(file);
-            return written != 0 ? (int64_t)written : -KERNEL_ERROR_ACCESS;
+            return written != 0 ? (int64_t)written : result;
         }
         written += (size_t)result;
         if ((size_t)result < chunk) break;
     }
+    if (regular) syscall_gate_unlock(&filesystem_gate);
     kernel_vfs_file_release(file);
     if (written != 0) kernel_scheduler_note_write();
     return (int64_t)written;
 }
 
-static int64_t syscall_read(uint64_t fd, uintptr_t user_buffer, size_t size)
+static int syscall_read(uint64_t *frame,
+                        uint64_t fd,
+                        uintptr_t user_buffer,
+                        size_t size,
+                        int64_t *syscall_result)
 {
     KernelFdTable *table = kernel_scheduler_current_fd_table();
-    if (fd >= KERNEL_FD_LIMIT || table == NULL) return -KERNEL_ERROR_BAD_FD;
-    if (!user_buffer_bounds_valid(user_buffer, size)) {
-        return -KERNEL_ERROR_FAULT;
+    if (syscall_result == NULL) return 1;
+    if (fd >= KERNEL_FD_LIMIT || table == NULL) {
+        *syscall_result = -KERNEL_ERROR_BAD_FD;
+        return 1;
     }
-    if (size == 0) return 0;
+    if (!user_buffer_bounds_valid(user_buffer, size)) {
+        *syscall_result = -KERNEL_ERROR_FAULT;
+        return 1;
+    }
+    if (size == 0) {
+        *syscall_result = 0;
+        return 1;
+    }
     KernelOpenFile *file = kernel_fd_acquire(table, (int)fd);
-    if (file == NULL) return -KERNEL_ERROR_BAD_FD;
+    if (file == NULL) {
+        *syscall_result = -KERNEL_ERROR_BAD_FD;
+        return 1;
+    }
+    if (kernel_vfs_file_kind(file) == KERNEL_VNODE_KEYBOARD) {
+        kernel_vfs_file_release(file);
+        kernel_scheduler_syscall_leave(frame);
+        return kernel_keyboard_read(frame, user_buffer, size,
+                                    syscall_result);
+    }
+    if (!syscall_gate_lock(&filesystem_gate)) {
+        kernel_vfs_file_release(file);
+        *syscall_result = -KERNEL_ERROR_AGAIN;
+        return 1;
+    }
     uint8_t buffer[64];
     size_t read = 0;
     while (read < size) {
@@ -144,22 +222,30 @@ static int64_t syscall_read(uint64_t fd, uintptr_t user_buffer, size_t size)
         if (chunk > sizeof(buffer)) chunk = sizeof(buffer);
         int64_t result = kernel_vfs_file_read(file, buffer, chunk);
         if (result < 0) {
+            syscall_gate_unlock(&filesystem_gate);
             kernel_vfs_file_release(file);
-            return read != 0 ? (int64_t)read : -KERNEL_ERROR_ACCESS;
+            *syscall_result = read != 0 ? (int64_t)read : result;
+            return 1;
         }
-        if (result == 0) break;
+        if (result == 0) {
+            break;
+        }
         if (!kernel_copy_to_user(kernel_scheduler_current_space(),
                                  user_buffer + read,
                                  buffer,
                                  (size_t)result)) {
+            syscall_gate_unlock(&filesystem_gate);
             kernel_vfs_file_release(file);
-            return -KERNEL_ERROR_FAULT;
+            *syscall_result = -KERNEL_ERROR_FAULT;
+            return 1;
         }
         read += (size_t)result;
         if ((size_t)result < chunk) break;
     }
+    syscall_gate_unlock(&filesystem_gate);
     kernel_vfs_file_release(file);
-    return (int64_t)read;
+    *syscall_result = (int64_t)read;
+    return 1;
 }
 
 static int copy_user_path(uintptr_t user_path, char path[128])
@@ -187,10 +273,15 @@ static int64_t syscall_open(uintptr_t user_path, uint32_t flags)
     }
     char path[KERNEL_SYSCALL_PATH_LIMIT];
     if (!copy_user_path(user_path, path)) return -KERNEL_ERROR_FAULT;
+    if (!syscall_gate_lock(&filesystem_gate)) return -KERNEL_ERROR_AGAIN;
     KernelOpenFile *file = kernel_vfs_open(path, flags);
-    if (file == NULL) return -KERNEL_ERROR_NO_ENTRY;
+    if (file == NULL) {
+        syscall_gate_unlock(&filesystem_gate);
+        return -KERNEL_ERROR_NO_ENTRY;
+    }
     int fd = kernel_fd_install(kernel_scheduler_current_fd_table(), file, 3);
     kernel_vfs_file_release(file);
+    syscall_gate_unlock(&filesystem_gate);
     return fd >= 0 ? fd : -KERNEL_ERROR_TOO_MANY_FILES;
 }
 
@@ -209,7 +300,16 @@ static int64_t syscall_seek(uint64_t fd, int64_t offset, uint32_t whence)
     KernelOpenFile *file = kernel_fd_acquire(
         kernel_scheduler_current_fd_table(), (int)fd);
     if (file == NULL) return -KERNEL_ERROR_BAD_FD;
+    KernelVnodeKind kind = kernel_vfs_file_kind(file);
+    int gate_acquired = kind == KERNEL_VNODE_REGULAR &&
+                        syscall_gate_lock(&filesystem_gate);
+    int64_t gate_result = syscall_regular_gate_result(kind, gate_acquired);
+    if (gate_result != 0) {
+        kernel_vfs_file_release(file);
+        return gate_result;
+    }
     int64_t result = kernel_vfs_file_seek(file, offset, whence);
+    syscall_gate_unlock(&filesystem_gate);
     kernel_vfs_file_release(file);
     return result >= 0 ? result : -KERNEL_ERROR_INVALID;
 }
@@ -220,7 +320,16 @@ static int64_t syscall_fsync(uint64_t fd)
     KernelOpenFile *file = kernel_fd_acquire(
         kernel_scheduler_current_fd_table(), (int)fd);
     if (file == NULL) return -KERNEL_ERROR_BAD_FD;
+    KernelVnodeKind kind = kernel_vfs_file_kind(file);
+    int gate_acquired = kind == KERNEL_VNODE_REGULAR &&
+                        syscall_gate_lock(&filesystem_gate);
+    int64_t gate_result = syscall_regular_gate_result(kind, gate_acquired);
+    if (gate_result != 0) {
+        kernel_vfs_file_release(file);
+        return gate_result;
+    }
     int okay = kernel_vfs_file_sync(file);
+    syscall_gate_unlock(&filesystem_gate);
     kernel_vfs_file_release(file);
     return okay ? 0 : -KERNEL_ERROR_IO;
 }
@@ -276,8 +385,13 @@ static int syscall_exec(uint64_t *frame,
         *result = -KERNEL_ERROR_FAULT;
         return 1;
     }
+    if (!syscall_gate_lock(&filesystem_gate)) {
+        *result = -KERNEL_ERROR_AGAIN;
+        return 1;
+    }
     KernelOpenFile *probe = kernel_vfs_open(path, KERNEL_VFS_OPEN_READ);
     if (probe == NULL) {
+        syscall_gate_unlock(&filesystem_gate);
         *result = -KERNEL_ERROR_NO_ENTRY;
         return 1;
     }
@@ -296,38 +410,47 @@ static int syscall_exec(uint64_t *frame,
                                       &environment_count, strings, &used);
     }
     if (error != 0) {
+        syscall_gate_unlock(&filesystem_gate);
         *result = -error;
         return 1;
     }
-    return kernel_scheduler_exec(frame, path,
-                                 argument_count, arguments,
-                                 environment_count, environment,
-                                 result);
+    int completed = kernel_scheduler_exec(frame, path,
+                                          argument_count, arguments,
+                                          environment_count, environment,
+                                          result);
+    syscall_gate_unlock(&filesystem_gate);
+    return completed;
 }
 
 void kernel_syscall_dispatch(uint64_t *frame)
 {
     if (frame == NULL || kernel_scheduler_current_space() == NULL) return;
+    kernel_scheduler_syscall_enter(frame);
     uint64_t number = TRAP_REGISTER(frame, 0);
     uint64_t argument1 = TRAP_REGISTER(frame, 1);
     uint64_t argument2 = TRAP_REGISTER(frame, 2);
     uint64_t argument3 = TRAP_REGISTER(frame, 3);
     int64_t result;
     if (number == RARCHM64_SYS_EXIT) {
+        kernel_scheduler_syscall_leave(frame);
         kernel_scheduler_exit(frame, (int64_t)argument1);
         return;
     } else if (number == RARCHM64_SYS_WRITE) {
         result = syscall_write(argument1, (uintptr_t)argument2,
                                (size_t)argument3);
     } else if (number == RARCHM64_SYS_READ) {
-        result = syscall_read(argument1, (uintptr_t)argument2,
-                              (size_t)argument3);
+        if (!syscall_read(frame, argument1, (uintptr_t)argument2,
+                          (size_t)argument3, &result)) {
+            return;
+        }
     } else if (number == RARCHM64_SYS_YIELD) {
+        kernel_scheduler_syscall_leave(frame);
         kernel_scheduler_yield(frame);
         return;
     } else if (number == RARCHM64_SYS_GETPID) {
         result = (int64_t)kernel_scheduler_current_pid();
     } else if (number == RARCHM64_SYS_WAIT) {
+        kernel_scheduler_syscall_leave(frame);
         if (!kernel_scheduler_waitpid(frame, UINT64_MAX,
                                       (uintptr_t)argument1, &result)) {
             return;
@@ -335,11 +458,15 @@ void kernel_syscall_dispatch(uint64_t *frame)
     } else if (number == RARCHM64_SYS_WAITPID) {
         if (argument1 == 0 || argument1 > INT64_MAX) {
             result = -KERNEL_ERROR_INVALID;
-        } else if (!kernel_scheduler_waitpid(frame, argument1,
+        } else {
+            kernel_scheduler_syscall_leave(frame);
+            if (!kernel_scheduler_waitpid(frame, argument1,
                                              (uintptr_t)argument2, &result)) {
-            return;
+                return;
+            }
         }
     } else if (number == RARCHM64_SYS_JOIN) {
+        kernel_scheduler_syscall_leave(frame);
         if (!kernel_scheduler_join(frame, argument1,
                                    (uintptr_t)argument2, &result)) {
             return;
@@ -359,16 +486,39 @@ void kernel_syscall_dispatch(uint64_t *frame)
                           (uintptr_t)argument2,
                           (uintptr_t)argument3,
                           &result)) {
+            kernel_scheduler_syscall_leave(frame);
             return;
         }
+    } else if (number == RARCHM64_SYS_SLEEP) {
+        kernel_scheduler_syscall_leave(frame);
+        if (!kernel_scheduler_sleep(frame, argument1, &result)) return;
     } else {
         result = -KERNEL_ERROR_NOT_IMPLEMENTED;
     }
+    int64_t termination_status;
+    if (kernel_scheduler_termination_requested(&termination_status)) {
+        kernel_scheduler_syscall_leave(frame);
+        kernel_scheduler_exit(frame, termination_status);
+        return;
+    }
     TRAP_REGISTER(frame, 0) = (uint64_t)result;
+    kernel_scheduler_syscall_leave(frame);
 }
 
 int kernel_syscall_self_test(void)
 {
+    filesystem_gate.locked = 0;
+    kernel_wait_queue_init(&filesystem_gate.waiters);
+    /* Gate contention is retryable; unsupported descriptor kinds are not. */
+    if (syscall_regular_gate_result(KERNEL_VNODE_REGULAR, 1) != 0 ||
+        syscall_regular_gate_result(KERNEL_VNODE_REGULAR, 0) !=
+            -KERNEL_ERROR_AGAIN ||
+        syscall_regular_gate_result(KERNEL_VNODE_KEYBOARD, 0) !=
+            -KERNEL_ERROR_INVALID ||
+        syscall_regular_gate_result(KERNEL_VNODE_UART, 1) !=
+            -KERNEL_ERROR_INVALID) {
+        return 1;
+    }
     KernelAddressSpace *space = kernel_address_space_create();
     if (space == NULL) return 1;
     uintptr_t first;
