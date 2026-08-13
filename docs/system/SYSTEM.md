@@ -22,7 +22,7 @@
 | `0x58` | `PHYSICAL_ADDRESS_BITS` | 현재 64 |
 | `0x60` | `PAGE_SIZE` | 현재 4096 |
 | `0x68` | `VIRTUAL_ADDRESS_BITS` | 현재 39 |
-| `0x70` | `TIMER_FREQUENCY` | timer tick/초, 현재 1000 |
+| `0x70` | `TIMER_FREQUENCY` | timer tick/초, 현재 1,000,000,000 |
 | `0x78` | `INTERRUPT_LINES` | 현재 64 |
 | `0x80` | `VIO_HUB_BASE` | VIO Hub 물리주소 |
 | `0x88` | `VIO_SLOT_COUNT` | 현재 16 |

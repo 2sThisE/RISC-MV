@@ -334,6 +334,24 @@ static int64_t syscall_fsync(uint64_t fd)
     return okay ? 0 : -KERNEL_ERROR_IO;
 }
 
+static int64_t syscall_display_mode(uint64_t width,
+                                    uint64_t height,
+                                    uintptr_t user_info)
+{
+    KernelAddressSpace *space = kernel_scheduler_current_space();
+    KernelProcess *process = kernel_scheduler_current_process();
+    if (space == NULL || process == NULL ||
+        !kernel_user_buffer_writable(space, user_info,
+                                     sizeof(RArchM64DisplayInfo))) {
+        return -KERNEL_ERROR_FAULT;
+    }
+    RArchM64DisplayInfo info;
+    int64_t result = kernel_display_set_mode(process, width, height, &info);
+    if (result != 0) return result;
+    return kernel_copy_to_user(space, user_info, &info, sizeof(info))
+               ? 0 : -KERNEL_ERROR_FAULT;
+}
+
 static int copy_user_exec_vector(uintptr_t user_vector,
                                  const char **vector,
                                  size_t *count,
@@ -492,6 +510,12 @@ void kernel_syscall_dispatch(uint64_t *frame)
     } else if (number == RARCHM64_SYS_SLEEP) {
         kernel_scheduler_syscall_leave(frame);
         if (!kernel_scheduler_sleep(frame, argument1, &result)) return;
+    } else if (number == RARCHM64_SYS_DISPLAY_MODE) {
+        result = syscall_display_mode(argument1, argument2,
+                                      (uintptr_t)argument3);
+    } else if (number == RARCHM64_SYS_DISPLAY_PRESENT) {
+        kernel_scheduler_syscall_leave(frame);
+        if (!kernel_display_present(frame, &result)) return;
     } else {
         result = -KERNEL_ERROR_NOT_IMPLEMENTED;
     }

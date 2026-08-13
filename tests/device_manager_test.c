@@ -1,4 +1,5 @@
 #include "bus.h"
+#include "builtin_device_protocol.h"
 #include "device_abi.h"
 #include "device_manager.h"
 #include "interrupt.h"
@@ -293,7 +294,10 @@ int test_device_manager(void)
     assert(bus_write(&bus, device_bases[0], 8, 3));
     assert(bus_read(&bus, device_bases[0], 8, &value));
     assert(value == 3);
-    bus_tick(&bus, 2, &router);
+    bus_tick(&bus, TIMER_TICKS_PER_MILLISECOND / 2, &router);
+    assert(bus_read(&bus, device_bases[0], 8, &value));
+    assert(value == 3);
+    bus_tick(&bus, 3 * TIMER_TICKS_PER_MILLISECOND / 2, &router);
     assert(bus_read(&bus, device_bases[0], 8, &value));
     assert(value == 5);
 
@@ -349,7 +353,7 @@ int test_device_manager(void)
     assert(reattached->resources.bar_bases[0] == device_bases[0]);
     assert(reattached->resources.irqs[0] == 2);
     assert(bus_write(&bus, reattached->resources.bar_bases[0], 8, 4));
-    bus_tick(&bus, 1, &router);
+    bus_tick(&bus, TIMER_TICKS_PER_MILLISECOND, &router);
     assert(device_manager_detach_module(&manager, external_slot));
     assert(!interrupt_controller_take_next(&controller, &line));
 

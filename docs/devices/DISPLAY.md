@@ -11,6 +11,11 @@ guest program -> display BAR -> display_device.dll
 
 따라서 VM의 CPU는 픽셀을 직접 그리지 않는다. 게스트가 RAM에 픽셀을 쓰고 `PRESENT`를 요청하면 장치가 한 프레임을 안전하게 복사한다. 기본값은 자동 실행과 테스트에 적합한 headless frontend이며 Windows에서는 `-display window`로 실제 Win32 창을 사용할 수 있다. GPU 가속은 아직 없으며 키보드 입력은 별도의 VIO HID 장치로 분리되어 있다. 입력 규격은 `KEYBOARD.md`를 참고한다.
 
+host window의 client 크기와 guest mode는 서로 독립적이다. Win32 창은 현재 host가
+800×600으로 만들고 사용자가 자유롭게 조절하며, guest는 `SET_MODE`로 별도의
+framebuffer width/height를 확정한다. 출력 시에는 guest 종횡비를 유지해 host 창에
+확대 또는 축소한다.
+
 ## 실행
 
 ```powershell
@@ -68,23 +73,28 @@ framebuffer를 생성한다. 실행 중 문자열 렌더링이 필요하면 이 
 | `0x20` | `FORMAT` | R/W | `1 = XRGB8888` |
 | `0x28` | `FRAMEBUFFER` | R/W | guest 물리 RAM 주소 |
 | `0x30` | `BUFFER_SIZE` | R/W | 접근 가능한 framebuffer byte 수 |
-| `0x38` | `COMMAND` | W | `1 = PRESENT` |
+| `0x38` | `COMMAND` | W | `1 = PRESENT`, `2 = SET_MODE` |
 | `0x40` | `STATUS` | R | bit 0 ready, bit 1 busy, bit 2 error |
 | `0x48` | `FRAME_NUMBER` | R | 성공한 present 횟수 |
 | `0x50` | `IRQ_STATUS` | R/W1C | bit 0 완료, bit 1 오류 |
-| `0x58` | `CAPABILITIES` | R | bit 0 XRGB8888, bit 1 explicit present |
+| `0x58` | `CAPABILITIES` | R | bit 0 XRGB8888, bit 1 explicit present, bit 2 SET_MODE |
 | `0x60` | `ERROR_CODE` | R | 마지막 오류 코드 |
 
 `IRQ_STATUS`는 write-one-to-clear다. `CONTROL.IRQ_ENABLE`이 켜져 있으면 present 완료나 오류가 장치에 할당된 IRQ를 발생시킨다.
 
 ## 프레임 제출 순서
 
-1. guest가 framebuffer 영역에 XRGB8888 픽셀을 쓴다.
-2. `WIDTH`, `HEIGHT`, `STRIDE`, `FORMAT`, `FRAMEBUFFER`, `BUFFER_SIZE`를 설정한다.
-3. `CONTROL`에 enable과 필요하면 IRQ enable을 쓴다.
-4. `COMMAND`에 `PRESENT(1)`를 쓴다.
-5. polling이면 `STATUS`와 `FRAME_NUMBER`, interrupt 방식이면 `IRQ_STATUS`를 확인한다.
-6. 처리한 interrupt bit를 `IRQ_STATUS`에 다시 써서 지운다.
+1. `CONTROL`에 enable과 필요하면 IRQ enable을 쓴다.
+2. `WIDTH`, `HEIGHT`, `STRIDE`, `FORMAT`을 설정하고 `SET_MODE(2)`를 실행한다.
+3. `STATUS.ERROR`가 없으면 해당 guest mode가 적용된 것이다.
+4. `FRAMEBUFFER`, `BUFFER_SIZE`를 지정하고 framebuffer에 XRGB8888 픽셀을 쓴다.
+5. `COMMAND`에 `PRESENT(1)`를 쓴다.
+6. polling이면 `STATUS`와 `FRAME_NUMBER`, interrupt 방식이면 `IRQ_STATUS`를 확인한다.
+7. 처리한 interrupt bit를 `IRQ_STATUS`에 다시 써서 지운다.
+
+`SET_MODE`는 framebuffer 주소나 DMA 범위를 사용하지 않고 mode 산술과 frontend의
+수용 여부만 검사한다. 실패해도 이전에 적용된 mode는 유지된다. 기존 guest와의
+호환성을 위해 `SET_MODE`를 생략한 `PRESENT`도 변경된 mode를 먼저 검증·적용한다.
 
 장치는 제출 시점의 프레임 전체를 staging buffer로 복사한다. 제출 뒤 게스트가 원본 RAM을 바로 수정해도 host가 받은 프레임은 변하지 않는다. 장치 자체의 vsync는 아직 없으며 frontend가 프레임 소비 정책을 결정한다.
 

@@ -18,6 +18,10 @@ typedef struct {
 typedef struct {
     HANDLE handle;
 } HostEvent;
+
+typedef struct {
+    HANDLE handle;
+} HostHighResolutionTimer;
 #else
 #include <pthread.h>
 
@@ -33,6 +37,10 @@ typedef struct {
     pthread_cond_t condition;
     int signaled;
 } HostEvent;
+
+typedef struct {
+    int initialized;
+} HostHighResolutionTimer;
 #endif
 
 int host_thread_create(HostThread *thread,
@@ -43,7 +51,12 @@ int host_event_init(HostEvent *event);
 void host_event_destroy(HostEvent *event);
 int host_event_signal(HostEvent *event);
 int host_event_wait(HostEvent *event);
+int host_high_resolution_timer_init(HostHighResolutionTimer *timer);
+void host_high_resolution_timer_destroy(HostHighResolutionTimer *timer);
+int host_high_resolution_timer_wait(HostHighResolutionTimer *timer,
+                                    uint64_t nanoseconds);
 void host_thread_sleep_milliseconds(uint32_t milliseconds);
+uint64_t host_monotonic_nanoseconds(void);
 uint64_t host_monotonic_milliseconds(void);
 
 #endif

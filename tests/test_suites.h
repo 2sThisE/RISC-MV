@@ -19,6 +19,7 @@
     X("display_queue", test_display_queue)       \
     X("exception", test_exception)               \
     X("firmware", test_firmware)                 \
+    X("host_time", test_host_time)               \
     X("interrupt", test_interrupt)               \
     X("ir_translator", test_ir_translator)       \
     X("irq_controller", test_irq_controller)     \

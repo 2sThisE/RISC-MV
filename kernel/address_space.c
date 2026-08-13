@@ -3,6 +3,7 @@
 
 #define ADDRESS_PAGE_TABLE UINT64_C(1)
 #define ADDRESS_PAGE_USER UINT64_C(2)
+#define ADDRESS_PAGE_EXTERNAL UINT64_C(3)
 
 typedef struct {
     KernelListNode node;
@@ -18,6 +19,11 @@ struct KernelAddressSpace {
     KernelList pages;
     KernelSpinLock lock;
 };
+
+static KernelAddressPage *address_find_user_page(
+    KernelAddressSpace *space, uintptr_t virtual_address);
+static uint64_t *address_lookup_level0(KernelAddressSpace *space,
+                                       uintptr_t virtual_address);
 
 static KernelAddressPage *address_page_allocate(KernelAddressSpace *space,
                                                 uintptr_t virtual_address,
@@ -131,7 +137,9 @@ void kernel_address_space_destroy(KernelAddressSpace *space)
     KernelListNode *node;
     while ((node = kernel_list_pop_front(&space->pages)) != NULL) {
         KernelAddressPage *record = (KernelAddressPage *)node;
-        kernel_pmm_free_page(record->physical_address);
+        if (record->kind != ADDRESS_PAGE_EXTERNAL) {
+            kernel_pmm_free_page(record->physical_address);
+        }
         kernel_free(record);
     }
     kernel_free(space);
@@ -185,13 +193,80 @@ int kernel_address_space_map_anonymous(KernelAddressSpace *space,
     return 0;
 }
 
+int kernel_address_space_map_physical(KernelAddressSpace *space,
+                                      uintptr_t virtual_address,
+                                      uintptr_t physical_address,
+                                      size_t size,
+                                      uint64_t flags)
+{
+    if (space == NULL || size == 0 ||
+        ((uint64_t)virtual_address & KERNEL_PAGE_MASK) != 0 ||
+        ((uint64_t)physical_address & KERNEL_PAGE_MASK) != 0 ||
+        ((uint64_t)size & KERNEL_PAGE_MASK) != 0 ||
+        (uint64_t)virtual_address < KERNEL_USER_IMAGE_BASE ||
+        (uint64_t)virtual_address > UINT64_MAX - (uint64_t)size ||
+        (uint64_t)virtual_address + (uint64_t)size > KERNEL_USER_STACK_TOP ||
+        (uint64_t)physical_address > UINT64_MAX - (uint64_t)size ||
+        kernel_phys_to_virt(physical_address) == NULL ||
+        kernel_phys_to_virt(physical_address + size - 1) == NULL ||
+        (flags & ~(KERNEL_PTE_READ | KERNEL_PTE_WRITE |
+                   KERNEL_PTE_EXECUTE)) != 0 ||
+        (flags & KERNEL_PTE_READ) == 0 ||
+        ((flags & KERNEL_PTE_WRITE) != 0 &&
+         (flags & KERNEL_PTE_EXECUTE) != 0)) {
+        return 1;
+    }
+
+    kernel_spin_lock(&space->lock);
+    uintptr_t mapped_end = virtual_address;
+    for (size_t offset = 0; offset < size;
+         offset += (size_t)KERNEL_PAGE_SIZE) {
+        uintptr_t page = virtual_address + offset;
+        size_t index2 = (size_t)(((uint64_t)page >> 30) & 0x1FF);
+        size_t index1 = (size_t)(((uint64_t)page >> 21) & 0x1FF);
+        size_t index0 = (size_t)(((uint64_t)page >> 12) & 0x1FF);
+        if (index2 != 0) break;
+        uint64_t *level0 = address_private_level0(space, index1);
+        if (level0 == NULL || (level0[index0] & KERNEL_PTE_VALID) != 0) break;
+        KernelAddressPage *record = kernel_malloc(sizeof(*record));
+        if (record == NULL) break;
+        record->node.previous = NULL;
+        record->node.next = NULL;
+        record->physical_address = physical_address + offset;
+        record->virtual_address = page;
+        record->kind = ADDRESS_PAGE_EXTERNAL;
+        kernel_list_push_back(&space->pages, &record->node);
+        level0[index0] = (uint64_t)(physical_address + offset) |
+                         KERNEL_PTE_VALID | KERNEL_PTE_USER | flags;
+        mapped_end = page + (uintptr_t)KERNEL_PAGE_SIZE;
+    }
+    if ((size_t)(mapped_end - virtual_address) == size) {
+        kernel_spin_unlock(&space->lock);
+        return 0;
+    }
+    for (uintptr_t page = virtual_address; page < mapped_end;
+         page += (uintptr_t)KERNEL_PAGE_SIZE) {
+        uint64_t *level0 = address_lookup_level0(space, page);
+        size_t index0 = (size_t)(((uint64_t)page >> 12) & 0x1FF);
+        KernelAddressPage *record = address_find_user_page(space, page);
+        if (level0 != NULL) level0[index0] = 0;
+        if (record != NULL) {
+            kernel_list_remove(&space->pages, &record->node);
+            kernel_free(record);
+        }
+    }
+    kernel_spin_unlock(&space->lock);
+    return 1;
+}
+
 static KernelAddressPage *address_find_user_page(
     KernelAddressSpace *space, uintptr_t virtual_address)
 {
     KernelListNode *node = space->pages.sentinel.next;
     while (node != &space->pages.sentinel) {
         KernelAddressPage *page = (KernelAddressPage *)node;
-        if (page->kind == ADDRESS_PAGE_USER &&
+        if ((page->kind == ADDRESS_PAGE_USER ||
+             page->kind == ADDRESS_PAGE_EXTERNAL) &&
             page->virtual_address == virtual_address) {
             return page;
         }
@@ -257,7 +332,9 @@ int kernel_address_space_unmap_range(KernelAddressSpace *space,
         KernelAddressPage *record = address_find_user_page(space, page);
         level0[index0] = 0;
         kernel_list_remove(&space->pages, &record->node);
-        kernel_pmm_free_page(record->physical_address);
+        if (record->kind != ADDRESS_PAGE_EXTERNAL) {
+            kernel_pmm_free_page(record->physical_address);
+        }
         kernel_free(record);
     }
     kernel_spin_unlock(&space->lock);

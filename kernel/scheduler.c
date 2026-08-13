@@ -5,7 +5,9 @@
 #include <cvm/intrin.h>
 #include <cvm/mmio.h>
 
-#define KERNEL_TIMER_QUANTUM 2U
+#define KERNEL_TIMER_QUANTUM_MILLISECONDS 2U
+#define KERNEL_TIMER_QUANTUM_TICKS \
+    (UINT64_C(2) * TIMER_TICKS_PER_MILLISECOND)
 #define KERNEL_SCHEDULER_TEST_PROCESSES 2U
 #define KERNEL_SCHEDULER_TEST_THREADS 3U
 #define KERNEL_INIT_IMAGE_MAXIMUM ((size_t)4 * 1024 * 1024)
@@ -707,6 +709,12 @@ KernelAddressSpace *kernel_scheduler_current_space(void)
     return scheduler_current->process->image.address_space;
 }
 
+KernelProcess *kernel_scheduler_current_process(void)
+{
+    return kernel_scheduler_current_space() != NULL
+               ? scheduler_current->process : NULL;
+}
+
 KernelFdTable *kernel_scheduler_current_fd_table(void)
 {
     return kernel_scheduler_current_space() != NULL
@@ -908,12 +916,14 @@ int kernel_scheduler_sleep(uint64_t *frame,
         *result = 0;
         return 1;
     }
-    if (milliseconds > UINT64_MAX - (KERNEL_TIMER_QUANTUM - 1U)) {
+    if (milliseconds >
+        UINT64_MAX - (KERNEL_TIMER_QUANTUM_MILLISECONDS - 1U)) {
         *result = -KERNEL_ERROR_INVALID;
         return 1;
     }
-    uint64_t ticks = (milliseconds + KERNEL_TIMER_QUANTUM - 1U) /
-                     KERNEL_TIMER_QUANTUM;
+    uint64_t ticks =
+        (milliseconds + KERNEL_TIMER_QUANTUM_MILLISECONDS - 1U) /
+        KERNEL_TIMER_QUANTUM_MILLISECONDS;
     if (ticks == 0 || ticks > UINT64_MAX - scheduler_timer_count) {
         *result = -KERNEL_ERROR_INVALID;
         return 1;
@@ -1152,6 +1162,7 @@ int kernel_scheduler_exec(uint64_t *frame,
     KernelUserImage old_image;
     scheduler_copy_user_image(&old_image, &process->image);
     scheduler_exec_discard_other_threads(process, thread);
+    kernel_display_release_process(process);
     scheduler_copy_user_image(&process->image, &new_image);
     process->next_stack_slot = 1;
     process->exit_status = -1;
@@ -1208,6 +1219,7 @@ void kernel_scheduler_exit(uint64_t *frame, int64_t status)
     if (process->live_thread_count != 0) --process->live_thread_count;
     scheduler_notify_joiner(previous);
     if (process->live_thread_count == 0) {
+        kernel_display_release_process(process);
         if (process->exit_status == -1) process->exit_status = 0;
         process->state = KERNEL_PROCESS_ZOMBIE;
         scheduler_record_process_completion(process);
@@ -1265,6 +1277,7 @@ void kernel_scheduler_fault(uint64_t *frame,
     process->fault_info = info;
     process->faulted = 1;
     process->state = KERNEL_PROCESS_ZOMBIE;
+    kernel_display_release_process(process);
     scheduler_record_process_completion(process);
 
     KernelThread *next = scheduler_dequeue_or_idle();
@@ -1605,7 +1618,7 @@ int kernel_scheduler_self_test(void)
     }
     cvm_mmio_write64((uintptr_t)KERNEL_TIMER_ALIAS + TIMER_COUNTER_OFFSET, 0);
     cvm_mmio_write64((uintptr_t)KERNEL_TIMER_ALIAS + TIMER_COMPARE_OFFSET,
-                     KERNEL_TIMER_QUANTUM);
+                     KERNEL_TIMER_QUANTUM_TICKS);
     cvm_mmio_write64((uintptr_t)KERNEL_TIMER_ALIAS + TIMER_STATUS_OFFSET,
                      TIMER_STATUS_PENDING);
     cvm_mmio_write64((uintptr_t)KERNEL_TIMER_ALIAS + TIMER_CONTROL_OFFSET,

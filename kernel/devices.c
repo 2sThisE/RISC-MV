@@ -34,6 +34,7 @@ static int kernel_block_is_read_only;
 static KernelSpinLock kernel_block_lock;
 static KernelWaitQueue kernel_block_waiters;
 static KernelWaitQueue kernel_keyboard_waiters;
+static KernelWaitQueue kernel_display_waiters;
 static uint8_t kernel_keyboard_buffer[KERNEL_KEYBOARD_BUFFER_CAPACITY];
 static size_t kernel_keyboard_head;
 static size_t kernel_keyboard_length;
@@ -43,6 +44,10 @@ static volatile int kernel_block_request_success;
 static volatile uint64_t kernel_block_request_error;
 static size_t kernel_block_irq_wait_count;
 static size_t kernel_block_irq_completion_count;
+static KernelProcess *kernel_display_owner;
+static volatile int kernel_display_request_pending;
+static size_t kernel_display_irq_wait_count;
+static size_t kernel_display_irq_completion_count;
 static uintptr_t kernel_display_buffer_physical;
 static uint32_t *kernel_display_buffer_virtual;
 
@@ -371,6 +376,26 @@ static void handle_keyboard_interrupt(void)
                             VM_KEYBOARD_IRQ_OVERFLOW));
 }
 
+static void handle_display_interrupt(void)
+{
+    uintptr_t bar = kernel_display_device->bar;
+    uint64_t irq = cvm_mmio_read64(bar + DISPLAY_IRQ_STATUS_OFFSET);
+    uint64_t status = cvm_mmio_read64(bar + DISPLAY_STATUS_OFFSET);
+    cvm_mmio_write64(bar + DISPLAY_IRQ_STATUS_OFFSET,
+                     irq & (DISPLAY_IRQ_PRESENT_COMPLETE |
+                            DISPLAY_IRQ_ERROR));
+    if (kernel_display_request_pending &&
+        (irq & (DISPLAY_IRQ_PRESENT_COMPLETE | DISPLAY_IRQ_ERROR)) != 0) {
+        kernel_display_request_pending = 0;
+        ++kernel_display_irq_completion_count;
+        int okay = (irq & DISPLAY_IRQ_PRESENT_COMPLETE) != 0 &&
+                   (irq & DISPLAY_IRQ_ERROR) == 0 &&
+                   (status & DISPLAY_STATUS_ERROR) == 0;
+        (void)kernel_wait_queue_wake_one(
+            &kernel_display_waiters, okay ? 0 : -KERNEL_ERROR_IO);
+    }
+}
+
 void kernel_devices_interrupt(uint64_t *frame)
 {
     uint64_t active = cvm_mmio_read64((uintptr_t)KERNEL_IRQ_ALIAS +
@@ -387,6 +412,9 @@ void kernel_devices_interrupt(uint64_t *frame)
     } else if (kernel_keyboard_device != NULL &&
                line == kernel_keyboard_device->irq) {
         handle_keyboard_interrupt();
+    } else if (kernel_display_device != NULL &&
+               line == kernel_display_device->irq) {
+        handle_display_interrupt();
     }
     if (line != UINT32_MAX) {
         cvm_mmio_write64((uintptr_t)KERNEL_IRQ_ALIAS +
@@ -398,8 +426,12 @@ void kernel_devices_interrupt(uint64_t *frame)
 int kernel_devices_enable_interrupts(void)
 {
     if (kernel_block_device == NULL || kernel_keyboard_device == NULL ||
-        kernel_block_device->irq >= 64U || kernel_keyboard_device->irq >= 64U ||
-        kernel_block_device->irq == kernel_keyboard_device->irq) {
+        kernel_display_device == NULL || kernel_block_device->irq >= 64U ||
+        kernel_keyboard_device->irq >= 64U ||
+        kernel_display_device->irq >= 64U ||
+        kernel_block_device->irq == kernel_keyboard_device->irq ||
+        kernel_block_device->irq == kernel_display_device->irq ||
+        kernel_keyboard_device->irq == kernel_display_device->irq) {
         return 0;
     }
     cvm_mmio_write64(kernel_block_device->bar + VM_BLOCK_IRQ_ACK_OFFSET,
@@ -413,13 +445,18 @@ int kernel_devices_enable_interrupts(void)
                      VM_KEYBOARD_CONTROL_OFFSET,
                      VM_KEYBOARD_CONTROL_ENABLE |
                          VM_KEYBOARD_CONTROL_IRQ_ENABLE);
+    cvm_mmio_write64(kernel_display_device->bar + DISPLAY_IRQ_STATUS_OFFSET,
+                     DISPLAY_IRQ_PRESENT_COMPLETE | DISPLAY_IRQ_ERROR);
+    cvm_mmio_write64(kernel_display_device->bar + DISPLAY_CONTROL_OFFSET,
+                     DISPLAY_CONTROL_ENABLE | DISPLAY_CONTROL_IRQ_ENABLE);
     while (cvm_mmio_read64(kernel_keyboard_device->bar +
                            VM_KEYBOARD_EVENT_COUNT_OFFSET) != 0) {
         keyboard_deliver_event(cvm_mmio_read64(
             kernel_keyboard_device->bar + VM_KEYBOARD_EVENT_DATA_OFFSET));
     }
     uint64_t mask = (UINT64_C(1) << kernel_block_device->irq) |
-                    (UINT64_C(1) << kernel_keyboard_device->irq);
+                    (UINT64_C(1) << kernel_keyboard_device->irq) |
+                    (UINT64_C(1) << kernel_display_device->irq);
     cvm_mmio_write64((uintptr_t)KERNEL_IRQ_ALIAS +
                      IRQ_CONTROLLER_ENABLE_SET_OFFSET, mask);
     if (cvm_mmio_read64((uintptr_t)KERNEL_IRQ_ALIAS +
@@ -435,8 +472,216 @@ int kernel_devices_runtime_valid(void)
 {
     return kernel_device_interrupts_enabled &&
            !kernel_block_request_pending &&
+           !kernel_display_request_pending &&
            kernel_block_irq_wait_count != 0 &&
-           kernel_block_irq_wait_count == kernel_block_irq_completion_count;
+           kernel_block_irq_wait_count == kernel_block_irq_completion_count &&
+           kernel_display_owner == NULL &&
+           kernel_display_irq_wait_count ==
+               kernel_display_irq_completion_count;
+}
+
+int64_t kernel_display_set_mode(KernelProcess *process,
+                                uint64_t width,
+                                uint64_t height,
+                                RArchM64DisplayInfo *info)
+{
+    if (process == NULL || info == NULL || kernel_display_device == NULL ||
+        width == 0 || height == 0 || width > DISPLAY_MAX_WIDTH ||
+        height > DISPLAY_MAX_HEIGHT || width > UINT64_MAX / 4) {
+        return -KERNEL_ERROR_INVALID;
+    }
+    uint64_t stride = width * 4;
+    if (height > UINT64_MAX / stride) return -KERNEL_ERROR_INVALID;
+    uint64_t required = stride * height;
+    if (required > UINT64_MAX - KERNEL_PAGE_MASK) {
+        return -KERNEL_ERROR_INVALID;
+    }
+    uint64_t mapped = (required + KERNEL_PAGE_MASK) &
+                      KERNEL_PTE_ADDRESS_MASK;
+    if (mapped == 0 ||
+        mapped > KERNEL_USER_FRAMEBUFFER_LIMIT -
+                     KERNEL_USER_FRAMEBUFFER_BASE) {
+        return -KERNEL_ERROR_TOO_BIG;
+    }
+    if (kernel_display_owner != NULL && kernel_display_owner != process) {
+        return -KERNEL_ERROR_BUSY;
+    }
+    if (kernel_display_request_pending) return -KERNEL_ERROR_BUSY;
+
+    uintptr_t old_physical = process->framebuffer_physical;
+    size_t old_mapped = process->framebuffer_mapped_size;
+    size_t old_size = process->framebuffer_size;
+    uint32_t old_width = process->framebuffer_width;
+    uint32_t old_height = process->framebuffer_height;
+    uint32_t old_stride = process->framebuffer_stride;
+    uintptr_t replacement = 0;
+    int replaced = old_mapped != (size_t)mapped;
+    if (replaced) {
+        size_t pages = (size_t)(mapped / KERNEL_PAGE_SIZE);
+        replacement = kernel_pmm_alloc_contiguous(pages);
+        if (replacement == 0) return -KERNEL_ERROR_NO_MEMORY;
+        if (old_mapped != 0 &&
+            kernel_address_space_unmap_range(
+                process->image.address_space,
+                (uintptr_t)KERNEL_USER_FRAMEBUFFER_BASE,
+                old_mapped) != 0) {
+            kernel_pmm_release_range(replacement, (uintptr_t)mapped);
+            return -KERNEL_ERROR_IO;
+        }
+        if (kernel_address_space_map_physical(
+                process->image.address_space,
+                (uintptr_t)KERNEL_USER_FRAMEBUFFER_BASE,
+                replacement, (size_t)mapped,
+                KERNEL_PTE_READ | KERNEL_PTE_WRITE) != 0) {
+            if (old_mapped != 0) {
+                (void)kernel_address_space_map_physical(
+                    process->image.address_space,
+                    (uintptr_t)KERNEL_USER_FRAMEBUFFER_BASE,
+                    old_physical, old_mapped,
+                    KERNEL_PTE_READ | KERNEL_PTE_WRITE);
+            }
+            kernel_pmm_release_range(replacement, (uintptr_t)mapped);
+            return -KERNEL_ERROR_NO_MEMORY;
+        }
+        process->framebuffer_physical = replacement;
+        process->framebuffer_virtual =
+            (uintptr_t)KERNEL_USER_FRAMEBUFFER_BASE;
+        process->framebuffer_mapped_size = (size_t)mapped;
+    }
+
+    uintptr_t bar = kernel_display_device->bar;
+    cvm_mmio_write64(bar + DISPLAY_WIDTH_OFFSET, width);
+    cvm_mmio_write64(bar + DISPLAY_HEIGHT_OFFSET, height);
+    cvm_mmio_write64(bar + DISPLAY_STRIDE_OFFSET, stride);
+    cvm_mmio_write64(bar + DISPLAY_FORMAT_OFFSET,
+                     DISPLAY_FORMAT_XRGB8888);
+    cvm_mmio_write64(bar + DISPLAY_FRAMEBUFFER_OFFSET,
+                     process->framebuffer_physical);
+    cvm_mmio_write64(bar + DISPLAY_BUFFER_SIZE_OFFSET, required);
+    cvm_mmio_write64(bar + DISPLAY_CONTROL_OFFSET,
+                     DISPLAY_CONTROL_ENABLE |
+                         (kernel_device_interrupts_enabled
+                              ? DISPLAY_CONTROL_IRQ_ENABLE : 0));
+    cvm_mmio_write64(bar + DISPLAY_COMMAND_OFFSET,
+                     DISPLAY_COMMAND_SET_MODE);
+    if ((cvm_mmio_read64(bar + DISPLAY_STATUS_OFFSET) &
+         DISPLAY_STATUS_ERROR) != 0) {
+        cvm_mmio_write64(bar + DISPLAY_STATUS_OFFSET,
+                         DISPLAY_STATUS_ERROR);
+        if (old_mapped != 0) {
+            cvm_mmio_write64(bar + DISPLAY_WIDTH_OFFSET, old_width);
+            cvm_mmio_write64(bar + DISPLAY_HEIGHT_OFFSET, old_height);
+            cvm_mmio_write64(bar + DISPLAY_STRIDE_OFFSET, old_stride);
+            cvm_mmio_write64(bar + DISPLAY_FORMAT_OFFSET,
+                             DISPLAY_FORMAT_XRGB8888);
+            cvm_mmio_write64(bar + DISPLAY_FRAMEBUFFER_OFFSET,
+                             old_physical);
+            cvm_mmio_write64(bar + DISPLAY_BUFFER_SIZE_OFFSET, old_size);
+            cvm_mmio_write64(bar + DISPLAY_COMMAND_OFFSET,
+                             DISPLAY_COMMAND_SET_MODE);
+        }
+        if (replaced) {
+            (void)kernel_address_space_unmap_range(
+                process->image.address_space,
+                (uintptr_t)KERNEL_USER_FRAMEBUFFER_BASE,
+                (size_t)mapped);
+            if (old_mapped != 0) {
+                (void)kernel_address_space_map_physical(
+                    process->image.address_space,
+                    (uintptr_t)KERNEL_USER_FRAMEBUFFER_BASE,
+                    old_physical, old_mapped,
+                    KERNEL_PTE_READ | KERNEL_PTE_WRITE);
+            }
+            kernel_pmm_release_range(replacement, (uintptr_t)mapped);
+            process->framebuffer_physical = old_physical;
+            process->framebuffer_virtual = old_mapped != 0
+                ? (uintptr_t)KERNEL_USER_FRAMEBUFFER_BASE : 0;
+            process->framebuffer_mapped_size = old_mapped;
+        }
+        return -KERNEL_ERROR_IO;
+    }
+
+    if (replaced && old_mapped != 0) {
+        kernel_pmm_release_range(old_physical, old_mapped);
+    }
+
+    kernel_display_owner = process;
+    process->framebuffer_size = (size_t)required;
+    process->framebuffer_width = (uint32_t)width;
+    process->framebuffer_height = (uint32_t)height;
+    process->framebuffer_stride = (uint32_t)stride;
+    info->address = process->framebuffer_virtual;
+    info->size = required;
+    info->width = width;
+    info->height = height;
+    info->stride = stride;
+    info->format = DISPLAY_FORMAT_XRGB8888;
+    return 0;
+}
+
+int kernel_display_present(uint64_t *frame, int64_t *result)
+{
+    KernelProcess *process = kernel_scheduler_current_process();
+    if (result == NULL || frame == NULL || process == NULL) return 1;
+    if (kernel_display_owner != process || process->framebuffer_size == 0) {
+        *result = -KERNEL_ERROR_ACCESS;
+        return 1;
+    }
+    if (kernel_display_request_pending) {
+        *result = -KERNEL_ERROR_BUSY;
+        return 1;
+    }
+    uintptr_t bar = kernel_display_device->bar;
+    cvm_mmio_write64(bar + DISPLAY_IRQ_STATUS_OFFSET,
+                     DISPLAY_IRQ_PRESENT_COMPLETE | DISPLAY_IRQ_ERROR);
+    kernel_display_request_pending = 1;
+    ++kernel_display_irq_wait_count;
+    cvm_mmio_write64(bar + DISPLAY_COMMAND_OFFSET,
+                     DISPLAY_COMMAND_PRESENT);
+    if (kernel_scheduler_block_current(frame, &kernel_display_waiters,
+                                       0, 0) != 0) {
+        kernel_display_request_pending = 0;
+        --kernel_display_irq_wait_count;
+        cvm_mmio_write64(bar + DISPLAY_IRQ_STATUS_OFFSET,
+                         DISPLAY_IRQ_PRESENT_COMPLETE |
+                             DISPLAY_IRQ_ERROR);
+        *result = -KERNEL_ERROR_AGAIN;
+        return 1;
+    }
+    return 0;
+}
+
+void kernel_display_release_process(KernelProcess *process)
+{
+    if (process == NULL) return;
+    if (kernel_display_owner == process &&
+        kernel_display_request_pending) {
+        kernel_display_request_pending = 0;
+        if (kernel_display_irq_wait_count != 0) {
+            --kernel_display_irq_wait_count;
+        }
+        cvm_mmio_write64(kernel_display_device->bar +
+                             DISPLAY_IRQ_STATUS_OFFSET,
+                         DISPLAY_IRQ_PRESENT_COMPLETE |
+                             DISPLAY_IRQ_ERROR);
+    }
+    if (process->framebuffer_mapped_size != 0 &&
+        process->image.address_space != NULL) {
+        (void)kernel_address_space_unmap_range(
+            process->image.address_space,
+            process->framebuffer_virtual,
+            process->framebuffer_mapped_size);
+        kernel_pmm_release_range(process->framebuffer_physical,
+                                 process->framebuffer_mapped_size);
+    }
+    if (kernel_display_owner == process) kernel_display_owner = NULL;
+    process->framebuffer_physical = 0;
+    process->framebuffer_virtual = 0;
+    process->framebuffer_mapped_size = 0;
+    process->framebuffer_size = 0;
+    process->framebuffer_width = 0;
+    process->framebuffer_height = 0;
+    process->framebuffer_stride = 0;
 }
 
 int kernel_display_present_test_pattern(void)
@@ -486,10 +731,15 @@ int kernel_devices_init(void)
     kernel_block_request_error = VM_BLOCK_ERROR_NONE;
     kernel_block_irq_wait_count = 0;
     kernel_block_irq_completion_count = 0;
+    kernel_display_owner = NULL;
+    kernel_display_request_pending = 0;
+    kernel_display_irq_wait_count = 0;
+    kernel_display_irq_completion_count = 0;
     kernel_keyboard_head = 0;
     kernel_keyboard_length = 0;
     kernel_wait_queue_init(&kernel_keyboard_waiters);
     kernel_wait_queue_init(&kernel_block_waiters);
+    kernel_wait_queue_init(&kernel_display_waiters);
     cvm_mmio_write64((uintptr_t)KERNEL_UART_ALIAS + UART_CONTROL_OFFSET,
                      UART_CONTROL_ENABLE);
     if (!map_mmio_range((uintptr_t)KERNEL_IRQ_ALIAS,

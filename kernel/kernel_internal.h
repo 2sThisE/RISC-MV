@@ -96,6 +96,7 @@ void kernel_uart_put_hex64(uint64_t value);
 
 int kernel_pmm_init(const CvmBootInfo *info);
 uintptr_t kernel_pmm_alloc_page(void);
+uintptr_t kernel_pmm_alloc_contiguous(size_t page_count);
 void kernel_pmm_free_page(uintptr_t page);
 uint64_t kernel_pmm_free_page_count(void);
 void kernel_pmm_release_range(uintptr_t base, uintptr_t size);
@@ -124,6 +125,12 @@ int kernel_keyboard_read(uint64_t *frame,
                          size_t size,
                          int64_t *result);
 int kernel_display_present_test_pattern(void);
+int64_t kernel_display_set_mode(KernelProcess *process,
+                                uint64_t width,
+                                uint64_t height,
+                                RArchM64DisplayInfo *info);
+int kernel_display_present(uint64_t *frame, int64_t *result);
+void kernel_display_release_process(KernelProcess *process);
 
 int kernel_vfs_init(void);
 int kernel_vfs_read_file(const char *path,
@@ -188,6 +195,7 @@ int kernel_syscall_self_test(void);
 void kernel_syscall_dispatch(uint64_t *frame);
 
 KernelAddressSpace *kernel_scheduler_current_space(void);
+KernelProcess *kernel_scheduler_current_process(void);
 KernelFdTable *kernel_scheduler_current_fd_table(void);
 uint64_t kernel_scheduler_current_pid(void);
 void kernel_scheduler_yield(uint64_t *frame);

@@ -41,6 +41,8 @@ typedef struct {
 
 #define KERNEL_USER_IMAGE_BASE UINT64_C(0x01000000)
 #define KERNEL_USER_IMAGE_LIMIT UINT64_C(0x3E000000)
+#define KERNEL_USER_FRAMEBUFFER_BASE UINT64_C(0x3E000000)
+#define KERNEL_USER_FRAMEBUFFER_LIMIT UINT64_C(0x3E800000)
 #define KERNEL_USER_STACK_TOP UINT64_C(0x3F000000)
 #define KERNEL_USER_STACK_SIZE UINT64_C(0x00010000)
 #define KERNEL_THREAD_KERNEL_STACK_SIZE ((size_t)0x00010000)
@@ -93,6 +95,13 @@ struct KernelProcess {
     uint64_t fault_cause;
     uint64_t fault_address;
     uint64_t fault_info;
+    uintptr_t framebuffer_physical;
+    uintptr_t framebuffer_virtual;
+    size_t framebuffer_mapped_size;
+    size_t framebuffer_size;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint32_t framebuffer_stride;
     KernelProcessState state;
     int faulted;
     int registered;
@@ -168,6 +177,11 @@ int kernel_address_space_map_anonymous(KernelAddressSpace *space,
                                        uintptr_t virtual_address,
                                        uint64_t flags,
                                        uintptr_t *physical_address);
+int kernel_address_space_map_physical(KernelAddressSpace *space,
+                                      uintptr_t virtual_address,
+                                      uintptr_t physical_address,
+                                      size_t size,
+                                      uint64_t flags);
 int kernel_address_space_unmap_range(KernelAddressSpace *space,
                                      uintptr_t virtual_address,
                                      size_t size);

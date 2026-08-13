@@ -138,6 +138,21 @@ reference kernel이 현재 사용하는 초기 syscall 번호는 다음과 같�
 | 11 | `fsync` | `R1=fd` |
 | 12 | `exec` | `R1=path`, `R2=argv`, `R3=envp` |
 | 13 | `sleep` | `R1=milliseconds` |
+| 14 | `display_mode` | `R1=width`, `R2=height`, `R3=display_info_address` |
+| 15 | `display_present` | 없음 |
+
+`display_mode`는 XRGB8888 back buffer를 현재 process에 배타적으로 할당하고
+48바이트 `RArchM64DisplayInfo`에 user VA, 실제 byte 수, width, height, stride와
+format을 차례로 반환한다. width/height는 1 이상 1920x1080 이하이고 stride는
+`width * 4`로 kernel이 계산한다. 해상도를 키울 때는 새 연속 물리 buffer와
+user mapping을 먼저 준비하며 성공한 뒤에만 이전 buffer를 반환한다. 다른
+process가 display를 소유하면 `-EBUSY`, RAM이 부족하면 `-ENOMEM`이다.
+
+user는 반환된 writable back buffer를 채운 뒤 `display_present`를 호출한다.
+호출 thread는 장치가 staging front buffer로 복사하고 present-completion IRQ를
+보낼 때까지 CPU를 점유하지 않고 대기한다. process 종료 또는 성공한 `exec`은
+mapping과 물리 buffer를 반환한다. host window 크기는 이 guest mode와 독립이며
+frontend가 guest frame을 host window에 맞춰 표시한다.
 
 `open`의 flags bit 0은 read, bit 1은 write, bit 2는 append이며 최소 read 또는
 write 하나가 필요하다. append는 write와 함께 써야 하고 각 write 직전에 현재

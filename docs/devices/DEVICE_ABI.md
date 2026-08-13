@@ -53,7 +53,7 @@ DMA는 MMIO가 아니라 일반 물리 RAM만 접근하며 범위 밖 요청은 
 
 `get_service`는 장치 ABI를 특정 GUI 라이브러리나 운영체제 API에 묶지 않기 위한 확장점이다. 현재 `display.present` version 1과 `input.keyboard` version 1 서비스가 있다. 디스플레이 장치는 완성된 프레임을 host frontend로 전달하고, 키보드 장치는 정규화된 HID 입력 sink를 등록한다. 등록되지 않은 서비스나 다른 version을 요청하면 `NULL`을 반환한다. 기존 ABI version 1 모듈과의 prefix 호환성을 위해 이 함수는 `VmDeviceHostApi` 끝에 추가되어 있다.
 
-장치 callback은 코어 worker 또는 장치 worker에서 실행될 수 있다. 오래 block하지 않아야 하며 같은 장치 BAR로 재진입하면 안 된다. Device Manager는 같은 BAR의 MMIO를 직렬화하고 `tick`은 BAR 0과 직렬화한다. 서로 다른 BAR callback은 동시에 실행될 수 있으므로 공유 장치 상태는 모듈이 직접 동기화해야 한다.
+장치 callback은 코어 worker 또는 장치 worker에서 실행될 수 있다. 오래 block하지 않아야 하며 같은 장치 BAR로 재진입하면 안 된다. Device Manager는 같은 BAR의 MMIO를 직렬화하고 `tick`은 BAR 0과 직렬화한다. 서로 다른 BAR callback은 동시에 실행될 수 있으므로 공유 장치 상태는 모듈이 직접 동기화해야 한다. 외부 ABI v1 모듈의 `tick` 인자는 경과 밀리초다. VM 내부의 1GHz 나노초 tick은 Device Manager가 누적해 완성된 밀리초만 모듈에 전달하므로 기존 모듈의 시간 의미를 유지한다.
 
 ## VIO Hub
 

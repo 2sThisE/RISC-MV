@@ -78,6 +78,11 @@ int test_display(void)
     assert(slot->resources.irq_count == 1);
     uint64_t base = slot->resources.bar_bases[0];
 
+    assert(bus_write(&bus,
+                     base + DISPLAY_CONTROL_OFFSET,
+                     8,
+                     DISPLAY_CONTROL_ENABLE |
+                         DISPLAY_CONTROL_IRQ_ENABLE));
     assert(bus_write(&bus, base + DISPLAY_WIDTH_OFFSET, 8, 2));
     assert(bus_write(&bus, base + DISPLAY_HEIGHT_OFFSET, 8, 2));
     assert(bus_write(&bus, base + DISPLAY_STRIDE_OFFSET, 8, 8));
@@ -94,10 +99,20 @@ int test_display(void)
                      8,
                      sizeof(pixels)));
     assert(bus_write(&bus,
-                     base + DISPLAY_CONTROL_OFFSET,
+                     base + DISPLAY_COMMAND_OFFSET,
                      8,
-                     DISPLAY_CONTROL_ENABLE |
-                         DISPLAY_CONTROL_IRQ_ENABLE));
+                     DISPLAY_COMMAND_SET_MODE));
+    uint64_t value;
+    assert(bus_read(&bus,
+                    base + DISPLAY_STATUS_OFFSET,
+                    8,
+                    &value));
+    assert(value == DISPLAY_STATUS_READY);
+    assert(bus_read(&bus,
+                    base + DISPLAY_CAPABILITIES_OFFSET,
+                    8,
+                    &value));
+    assert((value & DISPLAY_CAP_MODE_SET) != 0);
     assert(bus_write(&bus,
                      base + DISPLAY_COMMAND_OFFSET,
                      8,
@@ -132,7 +147,6 @@ int test_display(void)
     unsigned int line;
     assert(interrupt_controller_take_next(&controller, &line));
     assert(line == slot->resources.irqs[0]);
-    uint64_t value;
     assert(bus_read(&bus,
                     base + DISPLAY_STATUS_OFFSET,
                     8,
@@ -179,6 +193,35 @@ int test_display(void)
                     8,
                     &value));
     assert(value == DISPLAY_STATUS_READY);
+    assert(bus_write(&bus,
+                     base + DISPLAY_IRQ_STATUS_OFFSET,
+                     8,
+                     DISPLAY_IRQ_ERROR));
+
+    /* SET_MODE validates dimensions independently of framebuffer DMA and
+     * leaves the device usable after the error is acknowledged. */
+    assert(bus_write(&bus,
+                     base + DISPLAY_WIDTH_OFFSET,
+                     8,
+                     DISPLAY_MAX_WIDTH + 1));
+    assert(bus_write(&bus,
+                     base + DISPLAY_STRIDE_OFFSET,
+                     8,
+                     (DISPLAY_MAX_WIDTH + 1) * 4));
+    assert(bus_write(&bus,
+                     base + DISPLAY_COMMAND_OFFSET,
+                     8,
+                     DISPLAY_COMMAND_SET_MODE));
+    assert(interrupt_controller_take_next(&controller, &line));
+    assert(bus_read(&bus,
+                    base + DISPLAY_ERROR_CODE_OFFSET,
+                    8,
+                    &value));
+    assert(value == DISPLAY_ERROR_DIMENSIONS);
+    assert(bus_write(&bus,
+                     base + DISPLAY_STATUS_OFFSET,
+                     8,
+                     DISPLAY_STATUS_ERROR));
     assert(bus_write(&bus,
                      base + DISPLAY_IRQ_STATUS_OFFSET,
                      8,

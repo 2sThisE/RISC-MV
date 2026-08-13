@@ -38,7 +38,7 @@
     검증하는 `copy_from_user`/`copy_to_user`로 잘못된 포인터와 overflow를
     fault 없이 거부한다. 초기 ABI는 `exit`, FD 기반 `write`/`read`, `yield`,
     `getpid`, `wait`, `waitpid`, `join`, `open`, `close`, `seek`, `fsync`, `exec`,
-    timer 기반 `sleep`이다.
+    timer 기반 `sleep`, `display_mode`와 `display_present`다.
 14. `/BIN/INIT.EXF`를 읽어 PID 1 process로 만들고, 동적
     `KernelProcess`/`KernelThread` 객체로 총 2개 process와 3개 thread를 만든다.
     init의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 64KiB
@@ -70,7 +70,9 @@ init 통합 검사가 실패하면 더 이상 모든 원인을 `ARGS ERROR`로 �
 `E/F`는 join 결과/status, `G`~`Q`는 파일 syscall, `R`~`V`는 exec 실패
 rollback, `W`~`Z`는 새 image의 argv/envp와 FD 유지 단계다. 이 코드는 반복
 부팅에서 최초 실패 지점을 보존하기 위한 회귀 진단 ABI이며 정상 출력은
-`INIT: EXEC/FD OK`다.
+`INIT: EXEC/FD OK`다. `a`~`h`는 32x32 mode/present, 64x64 buffer 교체와
+present, 최소 RAM에서 1920x1080 할당 실패, 잘못된 mode 거부 뒤 기존 buffer
+재사용을 검사하는 display 단계다.
 
 빌드는 프로젝트 루트에서 실행한다.
 
@@ -183,7 +185,8 @@ detach 경로를 사용하므로 늦게 도착한 두 번째 wake는 no-op이다
 실행 가능한 thread가 없고 `BLOCKED` thread만 남으면 scheduler는 `EI; WAIT`로
 hardware idle에 들어간다. `EI` 직후 `WAIT` 실행 전에 timer IRQ가 도착한 경우
 handler가 저장된 PC를 idle 복귀 label로 옮겨 이미 처리한 IRQ 뒤 다시 잠드는
-경쟁을 막는다. `sleep(milliseconds)`는 2ms timer quantum 단위로 올림해 이
+경쟁을 막는다. 하드웨어 timer는 1GHz 나노초 tick을 사용하고 2,000,000 tick마다
+스케줄러 IRQ를 발생시킨다. `sleep(milliseconds)`는 2ms timer quantum 단위로 올림해 이
 timeout 경로를 사용한다. `waitpid`/`join`도 마지막 runnable thread를 block할 수
 있으며 `WNOHANG` 옵션은 아직 없다.
 
@@ -220,3 +223,11 @@ sleep 가능한 gate로 직렬화하므로 다른 thread가 잠든 syscall이 �
 spinlock에 진입해 CPU를 소모하지 않는다.
 init 회귀는 worker가 runnable인 동안 RMFS read를 수행하고 실제 continuation
 전환 및 block 요청/완료 IRQ 횟수 일치를 검사한다.
+
+display syscall은 host window와 독립적인 1x1~1920x1080 XRGB8888 guest mode를
+제공한다. kernel은 `width * height * 4`와 4KiB 올림을 overflow 없이 검사하고
+PMM에서 연속 물리 buffer를 할당해 현재 process의 `0x3E000000`부터 RW/NX로
+매핑한다. 크기가 달라지면 새 buffer와 mapping이 모두 성공한 뒤 이전 buffer를
+반환한다. 이 user mapping이 back buffer이고 display 장치가 present 때 DMA로
+복사한 staging frame이 front buffer다. 호출 thread는 완료 IRQ까지 wait queue에서
+잠들며 process 종료와 exec는 mapping 및 물리 page를 반환한다.

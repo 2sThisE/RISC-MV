@@ -242,6 +242,87 @@ init_execed:
     CMPI32 R0, 0
     BRCC NE, init_failed
 
+    ; Allocate a process-owned 32x32 XRGB8888 back buffer. The returned
+    ; RArchM64DisplayInfo occupies 48 bytes at SP-64.
+    MOVI32U R13, 97
+    MOVI32U R0, 14
+    MOVI32U R1, 32
+    MOVI32U R2, 32
+    MOV R3, SP
+    ADDI32 R3, -64
+    SYSCALL
+    CMPI32 R0, 0
+    BRCC NE, init_failed
+    MOV R8, SP
+    ADDI32 R8, -64
+    LOAD64 R9, R8
+    MOVI32U R10, 0x00FF0000
+    STORE32 R9, R10
+    MOVI32U R10, 0x0000FF00
+    STORE32O R9, R10, 4
+
+    MOVI32U R13, 98
+    MOVI32U R0, 15
+    SYSCALL
+    CMPI32 R0, 0
+    BRCC NE, init_failed
+
+    ; Growing the mode replaces the old allocation only after the new
+    ; contiguous buffer and mapping are ready.
+    MOVI32U R13, 99
+    MOVI32U R0, 14
+    MOVI32U R1, 64
+    MOVI32U R2, 64
+    MOV R3, SP
+    ADDI32 R3, -64
+    SYSCALL
+    CMPI32 R0, 0
+    BRCC NE, init_failed
+    MOV R8, SP
+    ADDI32 R8, -64
+    LOAD64 R9, R8
+    MOVI32U R10, 0x000000FF
+    STORE64 R9, R10
+
+    MOVI32U R13, 100
+    MOVI32U R0, 15
+    SYSCALL
+    CMPI32 R0, 0
+    BRCC NE, init_failed
+
+    ; The 2 MiB minimum boot profile cannot provide an 8 MiB contiguous
+    ; 1920x1080 buffer. Allocation failure must preserve the active mode.
+    MOVI32U R13, 101
+    MOVI32U R0, 14
+    MOVI32U R1, 1920
+    MOVI32U R2, 1080
+    MOV R3, SP
+    ADDI32 R3, -64
+    SYSCALL
+    CMPI32 R0, -12
+    BRCC NE, init_failed
+    MOVI32U R13, 102
+    MOVI32U R0, 15
+    SYSCALL
+    CMPI32 R0, 0
+    BRCC NE, init_failed
+
+    ; An invalid replacement must also leave the active buffer usable.
+    MOVI32U R13, 103
+    MOVI32U R0, 14
+    MOVI32U R1, 1921
+    MOVI32U R2, 64
+    MOV R3, SP
+    ADDI32 R3, -64
+    SYSCALL
+    CMPI32 R0, -22
+    BRCC NE, init_failed
+    MOVI32U R13, 104
+    MOVI32U R0, 15
+    SYSCALL
+    CMPI32 R0, 0
+    BRCC NE, init_failed
+
     MOVI32U R0, 1
     MOVI32U R1, 1
     MOVI64 R2, init_exec_message

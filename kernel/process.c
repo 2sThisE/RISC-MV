@@ -30,7 +30,7 @@ static int process_map_thread_stack(KernelProcess *process,
     uintptr_t top = (uintptr_t)(KERNEL_USER_STACK_TOP - offset);
     if (top < KERNEL_USER_STACK_SIZE) return 0;
     uintptr_t bottom = top - (uintptr_t)KERNEL_USER_STACK_SIZE;
-    if (bottom < (uintptr_t)KERNEL_USER_IMAGE_LIMIT) return 0;
+    if (bottom < (uintptr_t)KERNEL_USER_FRAMEBUFFER_LIMIT) return 0;
     uintptr_t mapped_end = bottom;
     for (uintptr_t page = bottom; page < top;
          page += (uintptr_t)KERNEL_PAGE_SIZE) {
@@ -303,6 +303,7 @@ int kernel_thread_destroy(KernelThread *thread)
 void kernel_process_destroy(KernelProcess *process)
 {
     if (process == NULL) return;
+    kernel_display_release_process(process);
     if (process->parent != NULL) {
         kernel_list_remove(&process->parent->children, &process->child_node);
         process->parent = NULL;

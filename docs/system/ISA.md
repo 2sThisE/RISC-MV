@@ -218,7 +218,7 @@ user 모드에서 외부 IRQ·동기 예외·시스템 콜이 전달되면 CPU�
 
 CPU는 명령어 하나를 완전히 실행한 다음 아래 순서로 외부 장치를 확인한다.
 
-1. `ClockSource.poll`에서 지난 tick 수를 받는다.
+1. `ClockSource.poll`에서 지난 나노초 tick 수를 받는다.
 2. `Bus`가 tick을 등록된 장치에 전달한다.
 3. 타이머 같은 장치가 IRQ Controller에 외부 IRQ를 올린다.
 4. controller가 mask와 route를 확인하여 대상 하드웨어 스레드에 전달한다.
@@ -226,7 +226,13 @@ CPU는 명령어 하나를 완전히 실행한 다음 아래 순서로 외부 �
 6. 현재 FLAGS, 권한 모드와 다음 PC를 스택 프레임에 저장하고 supervisor 모드의 핸들러로 분기한다.
 7. 핸들러가 장치를 ACK하고 controller에 EOI한 뒤 `IRET`하면 이전 상태가 복구된다.
 
-단일 CPU용 `cpu_run()`에서 `InstructionClock`을 사용하면 명령어 하나가 끝날 때 설정된 수의 tick을 반환한다. 멀티코어 `vm_run()`은 코어 worker와 분리된 장치 worker가 호스트 단조 시간의 경과 밀리초를 tick으로 전달한다. IRQ 주기는 클럭이 아니라 `TimerDevice`의 compare 레지스터가 결정한다.
+타이머 tick의 공식 단위는 나노초이며 주파수는 1GHz다. 단일 CPU용
+`cpu_run()`에서 `InstructionClock`을 사용하면 명령어 하나가 끝날 때 설정된 수의
+나노초 tick을 반환하므로 테스트를 실제 시간과 독립적으로 재현할 수 있다.
+멀티코어 `vm_run()`은 코어 worker와 분리된 장치 worker가
+`QueryPerformanceCounter` 또는 `CLOCK_MONOTONIC`에서 구한 호스트 단조 시간의
+경과 나노초를 전달한다. 장치 worker는 고정밀 wait를 사용해 100us마다 시간을
+반영한다. IRQ 주기는 클럭이 아니라 `TimerDevice`의 compare 레지스터가 결정한다.
 
 ```c
 InterruptController interrupts;
@@ -496,7 +502,9 @@ IPI는 48~63의 전용 벡터와 로컬 pending 비트를 사용하고 programma
 
 ## 타이머 장치
 
-타이머 레지스터는 모두 64비트이며 8바이트 정렬된 `LOAD64`, `STORE64`로만 접근할 수 있다.
+타이머 레지스터는 모두 64비트이며 8바이트 정렬된 `LOAD64`, `STORE64`로만
+접근할 수 있다. `COUNTER`와 `COMPARE`의 단위는 나노초이며 주파수는 1GHz다.
+64비트 counter는 약 584년 뒤 자연스럽게 wrap한다.
 
 | 오프셋 | 이름 | 읽기 | 쓰기 |
 |---:|---|---|---|

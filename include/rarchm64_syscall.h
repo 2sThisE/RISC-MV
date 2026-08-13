@@ -17,8 +17,19 @@ typedef enum {
     RARCHM64_SYS_SEEK = 10,
     RARCHM64_SYS_FSYNC = 11,
     RARCHM64_SYS_EXEC = 12,
-    RARCHM64_SYS_SLEEP = 13
+    RARCHM64_SYS_SLEEP = 13,
+    RARCHM64_SYS_DISPLAY_MODE = 14,
+    RARCHM64_SYS_DISPLAY_PRESENT = 15
 } RArchM64SyscallNumber;
+
+typedef struct {
+    unsigned long long address;
+    unsigned long long size;
+    unsigned long long width;
+    unsigned long long height;
+    unsigned long long stride;
+    unsigned long long format;
+} RArchM64DisplayInfo;
 
 typedef enum {
     RARCHM64_ENOENT = 2,

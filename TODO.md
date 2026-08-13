@@ -43,7 +43,7 @@
 - [x] RArchM64 ABI v1.0, LP64, 16-byte stack alignment와 scalar stack argument
 - [x] Clang 22 -> LLVM IR -> `cvmir` -> object/linker cross-build 경로
 - [x] `rarchm64-unknown-none` triple, sysroot, `crt0.o`, builtins와 `libcvm.a`
-- [x] 전체 build script, 35-suite test runner와 실제 boot 회귀 경로
+- [x] 전체 build script, 36-suite test runner와 실제 boot 회귀 경로
 
 ### reference kernel P1.2
 
@@ -174,15 +174,15 @@ parent/child와 wait 가능한 zombie는 P1.3-B, process별 FD table은 P1.3-D,
 완료 조건: I/O를 기다리는 thread가 CPU를 polling하지 않고 다른 runnable
 thread가 계속 실행되어야 한다.
 
-### P1.3-F — display 사용자 API와 가변 framebuffer
+### P1.3-F — display 사용자 API와 가변 framebuffer — 완료
 
-- [ ] host window 크기와 guest framebuffer 해상도를 분리한 mode API
-- [ ] checked `width * height * 4`, page roundup와 최대 1920x1080 검증
-- [ ] PMM contiguous allocation, scatter/gather 또는 DMA bounce 중 정책 확정
-- [ ] 해상도 변경 시 새 buffer 성공 후 이전 buffer를 교체·반환
-- [ ] process별 framebuffer mapping 권한과 사용자 `present` syscall/API
-- [ ] front/back buffer와 present-completion IRQ 기반 대기
-- [ ] 잘못된 stride, 작은 RAM, 반복 mode 변경과 process 종료 회귀 테스트
+- [x] host window 크기와 guest framebuffer 해상도를 분리한 mode API
+- [x] checked `width * height * 4`, page roundup와 최대 1920x1080 검증
+- [x] PMM 연속 물리 할당 + 장치 staging DMA 정책 확정
+- [x] 해상도 변경 시 새 buffer 성공 후 이전 buffer를 교체·반환
+- [x] process별 RW/NX framebuffer mapping과 사용자 `present` syscall/API
+- [x] user back buffer/장치 staging front buffer와 present-completion IRQ 대기
+- [x] 잘못된 stride·크기, 부족한 page, 반복 mode 변경과 process 종료 회귀 테스트
 
 완료 조건: user process가 선택한 유효 해상도로 화면을 출력하고 buffer를
 누수 없이 교체할 수 있어야 한다.
@@ -229,6 +229,7 @@ regular file을 읽고 생성·교체할 수 있어야 한다. 일반 파일시�
 - [x] process 종료 후 현재 PMM page, heap과 process/thread wait 상태 누수 없음
 - [x] process 종료와 exec에서 FD 참조/offset 소유권 유지 및 정리
 - [x] 일반 wait queue 도입 뒤 waiter/timeout 자원 누수 없음
+- [x] process별 framebuffer 교체·present IRQ와 종료 후 page 회수
 - [x] 현재 단계 전체 unit test와 실제 GPT/FAT32+RMFS boot regression 통과
 
 ## P1.4 — SMP kernel과 hardware-thread 활용
@@ -339,7 +340,6 @@ version, object metadata, tool 진단과 호환성 테스트를 함께 변경한
 
 ## 바로 시작할 작업
 
-1. P1.3-F host window와 guest framebuffer mode API 설계
-2. checked 해상도/stride/buffer 크기와 PMM buffer 정책 구현
-3. process별 framebuffer mapping과 `present` syscall/API 구현
-4. mode 변경·process 종료·present IRQ 회귀 테스트
+1. P1.4 secondary hardware thread online과 per-CPU 상태 구조 설계
+2. scheduler/PMM/heap/VFS/device lock 계층과 IRQ affinity 정책 확정
+3. 2C1T 최소 SMP 문맥 교환과 IPI reschedule 회귀 테스트

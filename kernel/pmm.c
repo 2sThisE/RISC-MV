@@ -146,6 +146,84 @@ uintptr_t kernel_pmm_alloc_page(void)
     return page;
 }
 
+uintptr_t kernel_pmm_alloc_contiguous(size_t page_count)
+{
+    if (page_count == 0 || page_count > UINT64_MAX / KERNEL_PAGE_SIZE ||
+        (uint64_t)page_count > pmm_free_count) {
+        return 0;
+    }
+
+    /* release_range() inserts ascending pages at the list head, producing a
+     * descending contiguous chain.  Reuse such chains before consuming a
+     * fresh memory-map range. */
+    uintptr_t before = 0;
+    uintptr_t current = pmm_recycled_head;
+    size_t length = current != 0 ? 1U : 0U;
+    while (current != 0) {
+        uint64_t *link = kernel_phys_to_virt(current);
+        if (link == NULL) return 0;
+        uintptr_t next = (uintptr_t)*link;
+        if (length == page_count) {
+            if (before == 0) {
+                pmm_recycled_head = next;
+            } else {
+                uint64_t *before_link = kernel_phys_to_virt(before);
+                if (before_link == NULL) return 0;
+                *before_link = (uint64_t)next;
+            }
+            uintptr_t first = current;
+            pmm_free_count -= page_count;
+            for (size_t page = 0; page < page_count; ++page) {
+                uint64_t *words = kernel_phys_to_virt(
+                    first + page * (uintptr_t)KERNEL_PAGE_SIZE);
+                if (words == NULL) return 0;
+                for (size_t i = 0;
+                     i < KERNEL_PAGE_SIZE / sizeof(uint64_t); ++i) {
+                    words[i] = 0;
+                }
+            }
+            return first;
+        }
+        if (next != 0 && current >= (uintptr_t)KERNEL_PAGE_SIZE &&
+            next == current - (uintptr_t)KERNEL_PAGE_SIZE) {
+            ++length;
+        } else {
+            before = current;
+            length = next != 0 ? 1U : 0U;
+        }
+        current = next;
+    }
+    for (;;) {
+        uint64_t required = (uint64_t)page_count * KERNEL_PAGE_SIZE;
+        if (pmm_range_next < pmm_range_end &&
+            (uint64_t)(pmm_range_end - pmm_range_next) >= required) {
+            uintptr_t first = pmm_range_next;
+            pmm_range_next += (uintptr_t)required;
+            pmm_free_count -= page_count;
+            for (size_t page = 0; page < page_count; ++page) {
+                uint64_t *words = kernel_phys_to_virt(
+                    first + page * (uintptr_t)KERNEL_PAGE_SIZE);
+                if (words == NULL) return 0;
+                for (size_t i = 0;
+                     i < KERNEL_PAGE_SIZE / sizeof(uint64_t); ++i) {
+                    words[i] = 0;
+                }
+            }
+            return first;
+        }
+        /* Keep a too-small tail available to ordinary page allocation. */
+        while (pmm_range_next < pmm_range_end) {
+            uintptr_t page = pmm_range_next;
+            pmm_range_next += (uintptr_t)KERNEL_PAGE_SIZE;
+            uint64_t *link = kernel_phys_to_virt(page);
+            if (link == NULL) return 0;
+            *link = (uint64_t)pmm_recycled_head;
+            pmm_recycled_head = page;
+        }
+        if (!select_next_usable_range()) return 0;
+    }
+}
+
 void kernel_pmm_free_page(uintptr_t page)
 {
     if (page == 0 || (page & (uintptr_t)KERNEL_PAGE_MASK) != 0 ||
@@ -198,5 +276,20 @@ int kernel_pmm_self_test(void)
     uintptr_t reused = kernel_pmm_alloc_page();
     if (reused != page) return 1;
     kernel_pmm_free_page(reused);
+    uint64_t before = kernel_pmm_free_page_count();
+    uintptr_t contiguous = kernel_pmm_alloc_contiguous(3);
+    if (contiguous == 0 ||
+        kernel_pmm_free_page_count() + 3 != before) {
+        return 1;
+    }
+    kernel_pmm_release_range(contiguous, 3 * (uintptr_t)KERNEL_PAGE_SIZE);
+    uintptr_t recycled = kernel_pmm_alloc_contiguous(3);
+    if (recycled != contiguous) return 1;
+    kernel_pmm_release_range(recycled, 3 * (uintptr_t)KERNEL_PAGE_SIZE);
+    if (kernel_pmm_free_page_count() != before) return 1;
+    if (before != UINT64_MAX &&
+        kernel_pmm_alloc_contiguous((size_t)before + 1U) != 0) {
+        return 1;
+    }
     return 0;
 }

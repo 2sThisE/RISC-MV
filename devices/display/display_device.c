@@ -19,6 +19,10 @@ typedef struct {
     uint64_t format;
     uint64_t framebuffer;
     uint64_t framebuffer_size;
+    uint64_t active_width;
+    uint64_t active_height;
+    uint64_t active_stride;
+    uint64_t active_format;
     uint64_t status;
     uint64_t irq_status;
     uint64_t frame_number;
@@ -44,7 +48,7 @@ static void display_set_error(DisplayDevice *display, DisplayError error)
     display_raise_irq(display, DISPLAY_IRQ_ERROR);
 }
 
-static int display_required_size(DisplayDevice *display,
+static int display_validate_mode(DisplayDevice *display,
                                  size_t *required)
 {
     if (display->width == 0 || display->height == 0 ||
@@ -70,12 +74,44 @@ static int display_required_size(DisplayDevice *display,
     }
 
     uint64_t size = display->stride * display->height;
-    if (size > display->framebuffer_size || size > SIZE_MAX) {
+    if (size > SIZE_MAX) {
         display_set_error(display, DISPLAY_ERROR_BUFFER_SIZE);
         return 0;
     }
     *required = (size_t)size;
     return 1;
+}
+
+static int display_apply_mode(DisplayDevice *display, size_t *required)
+{
+    size_t size;
+    if (!display_validate_mode(display, &size)) return 0;
+    if ((display->active_width != display->width ||
+         display->active_height != display->height ||
+         display->active_stride != display->stride ||
+         display->active_format != display->format) &&
+        display->frontend->resize != NULL &&
+        !display->frontend->resize(display->frontend->context,
+                                   (uint32_t)display->width,
+                                   (uint32_t)display->height)) {
+        display_set_error(display, DISPLAY_ERROR_FRONTEND);
+        return 0;
+    }
+    display->active_width = display->width;
+    display->active_height = display->height;
+    display->active_stride = display->stride;
+    display->active_format = display->format;
+    display->status = (display->control & DISPLAY_CONTROL_ENABLE) != 0
+                          ? DISPLAY_STATUS_READY
+                          : 0;
+    display->error_code = DISPLAY_ERROR_NONE;
+    if (required != NULL) *required = size;
+    return 1;
+}
+
+static void display_set_mode(DisplayDevice *display)
+{
+    (void)display_apply_mode(display, NULL);
 }
 
 static int ensure_staging(DisplayDevice *display, size_t required)
@@ -101,8 +137,12 @@ static void display_present(DisplayDevice *display)
     }
 
     size_t required;
-    if (!display_required_size(display, &required) ||
-        !ensure_staging(display, required)) {
+    if (!display_apply_mode(display, &required)) return;
+    if (required > display->framebuffer_size) {
+        display_set_error(display, DISPLAY_ERROR_BUFFER_SIZE);
+        return;
+    }
+    if (!ensure_staging(display, required)) {
         return;
     }
 
@@ -114,14 +154,6 @@ static void display_present(DisplayDevice *display)
                                 display->staging,
                                 required)) {
         display_set_error(display, DISPLAY_ERROR_DMA);
-        return;
-    }
-
-    if (display->frontend->resize != NULL &&
-        !display->frontend->resize(display->frontend->context,
-                                   (uint32_t)display->width,
-                                   (uint32_t)display->height)) {
-        display_set_error(display, DISPLAY_ERROR_FRONTEND);
         return;
     }
 
@@ -241,7 +273,8 @@ static int display_read(void *device_context,
             return 1;
         case DISPLAY_CAPABILITIES_OFFSET:
             *value = DISPLAY_CAP_XRGB8888 |
-                     DISPLAY_CAP_EXPLICIT_PRESENT;
+                     DISPLAY_CAP_EXPLICIT_PRESENT |
+                     DISPLAY_CAP_MODE_SET;
             return 1;
         case DISPLAY_ERROR_CODE_OFFSET:
             *value = display->error_code;
@@ -293,6 +326,8 @@ static int display_write(void *device_context,
         case DISPLAY_COMMAND_OFFSET:
             if (value == DISPLAY_COMMAND_PRESENT) {
                 display_present(display);
+            } else if (value == DISPLAY_COMMAND_SET_MODE) {
+                display_set_mode(display);
             } else {
                 display_set_error(display, DISPLAY_ERROR_COMMAND);
             }
@@ -328,6 +363,10 @@ static void display_reset(void *device_context)
     display->format = VM_PIXEL_FORMAT_XRGB8888;
     display->framebuffer = 0;
     display->framebuffer_size = 0;
+    display->active_width = 0;
+    display->active_height = 0;
+    display->active_stride = 0;
+    display->active_format = 0;
     display->status = 0;
     display->irq_status = 0;
     display->frame_number = 0;
@@ -346,7 +385,8 @@ static const VmDeviceModule DISPLAY_MODULE = {
         .device_id = UINT32_C(0x1000),
         .device_version = 1,
         .features = DISPLAY_CAP_XRGB8888 |
-                    DISPLAY_CAP_EXPLICIT_PRESENT,
+                    DISPLAY_CAP_EXPLICIT_PRESENT |
+                    DISPLAY_CAP_MODE_SET,
         .bar_count = 1,
         .irq_count = 1,
         .bar_sizes = { DISPLAY_MMIO_SIZE },

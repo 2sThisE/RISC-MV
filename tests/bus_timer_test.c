@@ -10,6 +10,9 @@
 
 int test_bus_timer(void)
 {
+    assert(TIMER_TICKS_PER_SECOND == UINT64_C(1000000000));
+    assert(TIMER_TICKS_PER_MILLISECOND == UINT64_C(1000000));
+    assert(TIMER_TICKS_PER_MICROSECOND == UINT64_C(1000));
     uint8_t memory[32] = {0};
     RAM ram = {
         .data = memory,
@@ -47,10 +50,26 @@ int test_bus_timer(void)
     InterruptRouter router;
     assert(interrupt_router_init(&router, targets, 1));
 
+    /* The replacement timer preserves individual nanosecond ticks. */
+    assert(bus_write(&bus,
+                     TIMER_TEST_BASE + TIMER_CONTROL_OFFSET,
+                     8,
+                     TIMER_CONTROL_ENABLE));
+    bus_tick(&bus, 1, &router);
+    assert(bus_read(&bus,
+                    TIMER_TEST_BASE + TIMER_COUNTER_OFFSET,
+                    8,
+                    &value));
+    assert(value == 1);
+    assert(bus_write(&bus,
+                     TIMER_TEST_BASE + TIMER_COUNTER_OFFSET,
+                     8,
+                     0));
+
     assert(bus_write(&bus,
                      TIMER_TEST_BASE + TIMER_COMPARE_OFFSET,
                      8,
-                     5));
+                     5 * TIMER_TICKS_PER_MICROSECOND));
     assert(bus_write(&bus,
                      TIMER_TEST_BASE + TIMER_CONTROL_OFFSET,
                      8,
@@ -58,19 +77,19 @@ int test_bus_timer(void)
                      TIMER_CONTROL_REPEAT |
                      TIMER_CONTROL_IRQ_ENABLE));
 
-    bus_tick(&bus, 12, &router);
+    bus_tick(&bus, 12 * TIMER_TICKS_PER_MICROSECOND, &router);
     assert(bus_read(&bus,
                     TIMER_TEST_BASE + TIMER_COUNTER_OFFSET,
                     8,
                     &value));
-    assert(value == 2);
+    assert(value == 2 * TIMER_TICKS_PER_MICROSECOND);
 
     unsigned int line;
     assert(interrupt_controller_take_next(&interrupts, &line));
     assert(line == TIMER_INTERRUPT_LINE);
 
-    /* 남은 3 tick으로 다음 반복 주기에 도달한다. */
-    bus_tick(&bus, 3, &router);
+    /* 남은 3us로 다음 반복 주기에 도달한다. */
+    bus_tick(&bus, 3 * TIMER_TICKS_PER_MICROSECOND, &router);
     assert(interrupt_controller_take_next(&interrupts, &line));
 
     assert(bus_write(&bus,

@@ -32,6 +32,7 @@ typedef struct DeviceManagerSlot {
     VmDeviceResources resources;
     const VmDeviceModule *module;
     void *device_context;
+    uint64_t tick_remainder_nanoseconds;
     DeviceBarAdapter bars[VM_DEVICE_MAX_BARS];
 } DeviceManagerSlot;
 

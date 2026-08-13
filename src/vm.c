@@ -3,6 +3,8 @@
 #include <limits.h>
 #include <stdlib.h>
 
+#define VM_DEVICE_TIMER_POLL_NANOSECONDS UINT64_C(100000)
+
 static HardwareThread *select_hardware_thread(Core *core)
 {
     for (size_t checked = 0; checked < core->thread_count; ++checked) {
@@ -160,11 +162,17 @@ static int core_worker(void *context)
 static int device_worker(void *context)
 {
     VirtualMachine *vm = context;
-    uint64_t previous = host_monotonic_milliseconds();
+    HostHighResolutionTimer poll_timer;
+    if (!host_high_resolution_timer_init(&poll_timer)) {
+        atomic_store_explicit(&vm->failed, 1, memory_order_release);
+        atomic_store_explicit(&vm->stop_requested, 1, memory_order_release);
+        return 0;
+    }
+    uint64_t previous = host_monotonic_nanoseconds();
 
     while (!atomic_load_explicit(&vm->stop_requested,
                                  memory_order_acquire)) {
-        uint64_t now = host_monotonic_milliseconds();
+        uint64_t now = host_monotonic_nanoseconds();
         if (now > previous) {
             bus_tick(vm->bus,
                      now - previous,
@@ -172,9 +180,18 @@ static int device_worker(void *context)
             previous = now;
         }
 
-        host_thread_sleep_milliseconds(1);
+        if (!host_high_resolution_timer_wait(
+                &poll_timer, VM_DEVICE_TIMER_POLL_NANOSECONDS)) {
+            host_high_resolution_timer_destroy(&poll_timer);
+            atomic_store_explicit(&vm->failed, 1, memory_order_release);
+            atomic_store_explicit(&vm->stop_requested,
+                                  1,
+                                  memory_order_release);
+            return 0;
+        }
     }
 
+    host_high_resolution_timer_destroy(&poll_timer);
     return 1;
 }
 

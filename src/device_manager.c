@@ -3,6 +3,8 @@
 #include <limits.h>
 #include <string.h>
 
+#define DEVICE_MODULE_TICK_NANOSECONDS UINT64_C(1000000)
+
 static void manager_lock(DeviceManager *manager)
 {
     while (atomic_flag_test_and_set_explicit(&manager->lock,
@@ -311,19 +313,32 @@ static void module_tick(void *context,
 {
     (void)interrupts;
     DeviceBarAdapter *bar = context;
-    if (bar != NULL && bar->slot != NULL && bar->bar == 0 &&
-        bar->slot->module != NULL &&
-        bar->slot->module->tick != NULL) {
-        bar->slot->module->tick(bar->slot->device_context, ticks);
+    if (bar == NULL || bar->slot == NULL || bar->bar != 0 ||
+        bar->slot->module == NULL || bar->slot->module->tick == NULL) {
+        return;
+    }
+    uint64_t milliseconds = ticks / DEVICE_MODULE_TICK_NANOSECONDS;
+    uint64_t remainder = ticks % DEVICE_MODULE_TICK_NANOSECONDS;
+    remainder += bar->slot->tick_remainder_nanoseconds;
+    if (remainder >= DEVICE_MODULE_TICK_NANOSECONDS) {
+        ++milliseconds;
+        remainder -= DEVICE_MODULE_TICK_NANOSECONDS;
+    }
+    bar->slot->tick_remainder_nanoseconds = remainder;
+    if (milliseconds != 0) {
+        bar->slot->module->tick(bar->slot->device_context, milliseconds);
     }
 }
 
 static void module_reset(void *context)
 {
     DeviceBarAdapter *bar = context;
-    if (bar != NULL && bar->slot != NULL && bar->bar == 0 &&
-        bar->slot->module != NULL &&
-        bar->slot->module->reset != NULL) {
+    if (bar == NULL || bar->slot == NULL || bar->bar != 0 ||
+        bar->slot->module == NULL) {
+        return;
+    }
+    bar->slot->tick_remainder_nanoseconds = 0;
+    if (bar->slot->module->reset != NULL) {
         bar->slot->module->reset(bar->slot->device_context);
     }
 }
