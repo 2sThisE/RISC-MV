@@ -9,8 +9,9 @@
 #define KERNEL_TIMER_QUANTUM_TICKS \
     (UINT64_C(2) * TIMER_TICKS_PER_MILLISECOND)
 #define KERNEL_SCHEDULER_TEST_PROCESSES 2U
-#define KERNEL_SCHEDULER_TEST_THREADS 3U
+#define KERNEL_SCHEDULER_TEST_THREADS 4U
 #define KERNEL_INIT_IMAGE_MAXIMUM ((size_t)4 * 1024 * 1024)
+#define KERNEL_SECONDARY_DISPATCH_WAIT UINT64_C(2000000)
 
 #define TRAP_REGISTER(frame, reg) ((frame)[15U - (reg)])
 #define TRAP_PC(frame) ((frame)[16])
@@ -23,7 +24,6 @@ static KernelList scheduler_reap_queue;
 static KernelList scheduler_thread_reap_queue;
 static KernelList scheduler_timeout_queue;
 static KernelWaitQueue scheduler_sleep_queue;
-static KernelThread *scheduler_current;
 static KernelProcess *scheduler_init_process;
 static size_t scheduler_process_count;
 static size_t scheduler_thread_count;
@@ -46,7 +46,15 @@ static size_t scheduler_kernel_block_switch_count;
 static int scheduler_completion_error;
 static int scheduler_active;
 static int scheduler_init_from_disk;
-static int scheduler_idle_active;
+static size_t scheduler_secondary_dispatch_count;
+static size_t scheduler_same_process_parallel_count;
+
+#define scheduler_current (kernel_smp_current_thread())
+
+static void scheduler_set_current(KernelThread *thread)
+{
+    kernel_smp_set_current_thread(thread);
+}
 
 static KernelProcess *scheduler_process_from_node(KernelListNode *node)
 {
@@ -120,6 +128,7 @@ static void scheduler_load(const KernelThread *previous,
                 thread->process->image.address_space));
         }
         cvm_set_ksp((uint64_t)thread->kernel_stack_top);
+        kernel_smp_switch_release();
         kernel_resume_continuation(resume_sp);
         return;
     }
@@ -155,12 +164,27 @@ static int scheduler_enqueue(KernelThread *thread)
 
 static KernelThread *scheduler_dequeue(void)
 {
-    KernelListNode *node = kernel_list_pop_front(&scheduler_run_queue);
-    if (node == NULL) return NULL;
-    KernelThread *thread = scheduler_run_thread_from_node(node);
-    thread->queued = 0;
-    thread->state = KERNEL_THREAD_RUNNING;
-    return thread;
+    uint64_t logical = kernel_smp_current_logical_id();
+    uint64_t affinity = logical != UINT64_MAX ? logical + 1 : 1;
+    size_t candidates = scheduler_run_queue.count;
+    while (candidates-- != 0) {
+        KernelListNode *node = kernel_list_pop_front(&scheduler_run_queue);
+        if (node == NULL) return NULL;
+        KernelThread *thread = scheduler_run_thread_from_node(node);
+        if (thread->cpu_affinity != 0 &&
+            thread->cpu_affinity != affinity) {
+            kernel_list_push_back(&scheduler_run_queue, node);
+            continue;
+        }
+        if (thread->cpu_affinity == 0) thread->cpu_affinity = affinity;
+        if (kernel_smp_process_active(thread->process)) {
+            ++scheduler_same_process_parallel_count;
+        }
+        thread->queued = 0;
+        thread->state = KERNEL_THREAD_RUNNING;
+        return thread;
+    }
+    return NULL;
 }
 
 static void scheduler_queue_reap(KernelProcess *process)
@@ -213,7 +237,15 @@ static void scheduler_wake_waiter(KernelThread *thread, int64_t result)
     thread->wait_tid = 0;
     thread->join_status_address = 0;
     thread->state = KERNEL_THREAD_RUNNABLE;
-    if (!scheduler_enqueue(thread)) scheduler_completion_error = 1;
+    if (!scheduler_enqueue(thread)) {
+        scheduler_completion_error = 1;
+    } else if (scheduler_active) {
+        if (thread->cpu_affinity != 0) {
+            (void)kernel_smp_wake_logical(thread->cpu_affinity - 1);
+        } else {
+            (void)kernel_smp_wake_idle_other();
+        }
+    }
 }
 
 size_t kernel_wait_queue_wake_one(KernelWaitQueue *queue, int64_t result)
@@ -528,7 +560,13 @@ static void scheduler_reap_deferred(void)
                 &scheduler_thread_reap_queue)) != NULL) {
         KernelThread *thread = scheduler_reap_thread_from_node(thread_node);
         thread->reap_queued = 0;
-        if (thread == scheduler_current || kernel_thread_destroy(thread) != 0) {
+        if (kernel_smp_thread_active(thread)) {
+            kernel_list_push_back(&scheduler_thread_reap_queue,
+                                  &thread->reap_node);
+            thread->reap_queued = 1;
+            return;
+        }
+        if (kernel_thread_destroy(thread) != 0) {
             scheduler_completion_error = 1;
         }
     }
@@ -536,8 +574,7 @@ static void scheduler_reap_deferred(void)
     while ((node = kernel_list_pop_front(&scheduler_reap_queue)) != NULL) {
         KernelProcess *process = scheduler_reap_process_from_node(node);
         process->reap_queued = 0;
-        if (scheduler_current != NULL &&
-            scheduler_current->process == process) {
+        if (kernel_smp_process_active(process)) {
             kernel_list_push_back(&scheduler_reap_queue,
                                   &process->reap_node);
             process->reap_queued = 1;
@@ -573,11 +610,17 @@ static KernelThread *scheduler_dequeue_or_idle(void)
 {
     KernelThread *next;
     while ((next = scheduler_dequeue()) == NULL) {
-        if (!scheduler_has_blocked_thread()) return NULL;
-        scheduler_idle_active = 1;
+        if (!scheduler_has_blocked_thread() &&
+            !kernel_smp_has_running_thread()) {
+            return NULL;
+        }
+        scheduler_set_current(NULL);
         ++scheduler_idle_count;
+        kernel_smp_idle_enter();
+        kernel_smp_switch_release();
         kernel_idle_wait();
-        scheduler_idle_active = 0;
+        kernel_smp_switch_reacquire();
+        kernel_smp_idle_leave();
         scheduler_reap_deferred();
     }
     return next;
@@ -608,7 +651,7 @@ static void scheduler_reschedule(uint64_t *frame, int timer_switch)
     KernelThread *next = scheduler_dequeue();
     if (next == NULL) return;
     if (timer_switch && next != previous) ++scheduler_preemption_count;
-    scheduler_current = next;
+    scheduler_set_current(next);
     scheduler_load(previous, next, frame);
 }
 
@@ -619,26 +662,36 @@ static void scheduler_finish(void)
     cvm_mmio_write64((uintptr_t)KERNEL_IRQ_ALIAS +
                      IRQ_CONTROLLER_ENABLE_CLEAR_OFFSET,
                      UINT64_C(1) << KERNEL_TIMER_INTERRUPT_LINE);
+    scheduler_reap_deferred();
+    uint64_t smp_logical = kernel_smp_logical_count();
+    int smp_valid = kernel_smp_runtime_valid();
+    int smp_stopped = kernel_smp_shutdown_secondary() == 0;
     int heap_valid = kernel_heap_validate() == 0;
     int success = scheduler_timer_count != 0 &&
-                  scheduler_preemption_count != 0 &&
+                   (scheduler_preemption_count != 0 ||
+                    scheduler_secondary_dispatch_count != 0) &&
                   scheduler_init_from_disk &&
                   scheduler_process_count == KERNEL_SCHEDULER_TEST_PROCESSES &&
                   scheduler_thread_count == KERNEL_SCHEDULER_TEST_THREADS &&
                   scheduler_completed_process_count ==
                       KERNEL_SCHEDULER_TEST_PROCESSES &&
                   scheduler_faulted_process_count == 1 &&
-                  scheduler_wait_block_count == 1 &&
-                  scheduler_wait_wake_count == 1 &&
+                  ((scheduler_wait_block_count == 1 &&
+                    scheduler_wait_wake_count == 1) ||
+                   (smp_logical > 1 && scheduler_wait_block_count == 0 &&
+                    scheduler_wait_wake_count == 0)) &&
                   scheduler_wait_reap_count == 1 &&
-                  scheduler_join_block_count == 1 &&
-                  scheduler_join_wake_count == 1 &&
+                  ((scheduler_join_block_count == 1 &&
+                    scheduler_join_wake_count == 1) ||
+                   (smp_logical > 1 && scheduler_join_block_count == 0 &&
+                    scheduler_join_wake_count == 0)) &&
                   scheduler_join_reap_count == 1 &&
                   scheduler_exec_count == 1 &&
                   scheduler_sleep_block_count == 1 &&
-                  scheduler_sleep_wake_count == 1 &&
-                  scheduler_idle_count != 0 &&
-                  scheduler_kernel_block_switch_count != 0 &&
+                   scheduler_sleep_wake_count == 1 &&
+                   scheduler_idle_count != 0 &&
+                   (scheduler_kernel_block_switch_count != 0 ||
+                    scheduler_secondary_dispatch_count != 0) &&
                   scheduler_timeout_queue.count == 0 &&
                   scheduler_sleep_queue.waiters.count == 0 &&
                   kernel_devices_runtime_valid() &&
@@ -646,7 +699,11 @@ static void scheduler_finish(void)
                       scheduler_completed_process_count &&
                   scheduler_processes.count == 1 &&
                   scheduler_reap_queue.count == 1 &&
-                  scheduler_completion_error == 0 && heap_valid;
+                   scheduler_completion_error == 0 && heap_valid &&
+                   smp_valid && smp_stopped &&
+                   (smp_logical == 1 ||
+                    (scheduler_secondary_dispatch_count != 0 &&
+                     scheduler_same_process_parallel_count != 0));
     if (success) {
         kernel_uart_puts("KERNEL: /BIN/INIT.EXF PID 1 OK\n");
         kernel_uart_puts("KERNEL: USER FAULT ISOLATED\n");
@@ -695,9 +752,39 @@ static void scheduler_finish(void)
         kernel_uart_put_hex64((uint64_t)scheduler_completion_error);
         kernel_uart_puts(" heap=");
         kernel_uart_put_hex64((uint64_t)heap_valid);
+        kernel_uart_puts(" smp=");
+        kernel_uart_put_hex64((uint64_t)smp_valid);
+        kernel_uart_puts("/");
+        kernel_uart_put_hex64((uint64_t)smp_stopped);
+        kernel_uart_puts(" dispatch=");
+        kernel_uart_put_hex64(scheduler_secondary_dispatch_count);
+        kernel_uart_puts(" parallel=");
+        kernel_uart_put_hex64(scheduler_same_process_parallel_count);
         kernel_uart_puts("\n");
     }
     cvm_halt();
+}
+
+static void scheduler_complete_or_wait(void)
+{
+    scheduler_set_current(NULL);
+    if (kernel_smp_is_boot_cpu()) scheduler_finish();
+    kernel_smp_secondary_retire();
+}
+
+static int scheduler_prepare_retire_frame(uint64_t *frame)
+{
+    if (frame == NULL) return 0;
+    TRAP_PC(frame) = (uint64_t)(uintptr_t)kernel_secondary_retire_entry;
+    TRAP_FLAGS(frame) &= KERNEL_SAVED_EXCEPTION_FRAME;
+    return 1;
+}
+
+static int scheduler_retire_secondary_frame(uint64_t *frame)
+{
+    if (kernel_smp_is_boot_cpu()) return 0;
+    scheduler_set_current(NULL);
+    return scheduler_prepare_retire_frame(frame);
 }
 
 KernelAddressSpace *kernel_scheduler_current_space(void)
@@ -769,11 +856,12 @@ int kernel_scheduler_block_current(uint64_t *frame,
 
     KernelThread *next = scheduler_dequeue_or_idle();
     if (next == NULL) {
+        scheduler_set_current(waiter);
         scheduler_detach_wait(waiter);
         waiter->state = KERNEL_THREAD_RUNNING;
         return 1;
     }
-    scheduler_current = next;
+    scheduler_set_current(next);
     scheduler_load(waiter, next, frame);
     return 0;
 }
@@ -827,13 +915,14 @@ int kernel_scheduler_block_kernel(KernelWaitQueue *queue,
 
     KernelThread *next = scheduler_dequeue_or_idle();
     if (next == NULL) {
+        scheduler_set_current(waiter);
         scheduler_detach_wait(waiter);
         waiter->state = KERNEL_THREAD_RUNNING;
         return 1;
     }
+    scheduler_set_current(next);
     if (next != waiter) {
         ++scheduler_kernel_block_switch_count;
-        scheduler_current = next;
         if (next->kernel_resume_sp != 0) {
             uintptr_t next_resume_sp = next->kernel_resume_sp;
             next->kernel_resume_sp = 0;
@@ -843,9 +932,12 @@ int kernel_scheduler_block_kernel(KernelWaitQueue *queue,
                     next->process->image.address_space));
             }
             cvm_set_ksp((uint64_t)next->kernel_stack_top);
+            kernel_smp_switch_release();
             kernel_switch_continuation(&waiter->kernel_resume_sp,
                                        next_resume_sp);
+            kernel_smp_switch_reacquire();
         } else {
+            kernel_smp_switch_release();
             kernel_suspend_to_user(
                 &waiter->kernel_resume_sp,
                 kernel_address_space_root(next->process->image.address_space),
@@ -853,6 +945,7 @@ int kernel_scheduler_block_kernel(KernelWaitQueue *queue,
                 next->stack_pointer,
                 next->kernel_stack_top,
                 next->registers);
+            kernel_smp_switch_reacquire();
         }
     }
     *wake_result = waiter->kernel_wait_result;
@@ -995,6 +1088,7 @@ int kernel_scheduler_waitpid(uint64_t *frame,
     ++scheduler_wait_block_count;
     KernelThread *next = scheduler_dequeue_or_idle();
     if (next == NULL) {
+        scheduler_set_current(waiter);
         waiter->wait_pid = 0;
         waiter->wait_status_address = 0;
         waiter->state = KERNEL_THREAD_RUNNING;
@@ -1002,7 +1096,7 @@ int kernel_scheduler_waitpid(uint64_t *frame,
         *result = -KERNEL_ERROR_AGAIN;
         return 1;
     }
-    scheduler_current = next;
+    scheduler_set_current(next);
     scheduler_load(waiter, next, frame);
     return 0;
 }
@@ -1058,6 +1152,7 @@ int kernel_scheduler_join(uint64_t *frame,
     ++scheduler_join_block_count;
     KernelThread *next = scheduler_dequeue_or_idle();
     if (next == NULL) {
+        scheduler_set_current(waiter);
         target->join_waiter = NULL;
         waiter->wait_tid = 0;
         waiter->join_status_address = 0;
@@ -1066,7 +1161,7 @@ int kernel_scheduler_join(uint64_t *frame,
         *result = -KERNEL_ERROR_AGAIN;
         return 1;
     }
-    scheduler_current = next;
+    scheduler_set_current(next);
     scheduler_load(waiter, next, frame);
     return 0;
 }
@@ -1105,6 +1200,49 @@ static void scheduler_exec_discard_other_threads(KernelProcess *process,
     }
     process->thread_count = 1;
     process->live_thread_count = 1;
+}
+
+static void scheduler_request_process_stop(KernelProcess *process,
+                                           KernelThread *owner)
+{
+    process->stop_owner = owner;
+    process->stop_requested = 1;
+    KernelListNode *node = process->threads.sentinel.next;
+    while (node != &process->threads.sentinel) {
+        KernelThread *thread = scheduler_process_thread_from_node(node);
+        node = node->next;
+        if (thread == owner) continue;
+        if (thread->queued) {
+            kernel_list_remove(&scheduler_run_queue, &thread->run_node);
+            thread->queued = 0;
+        }
+        if (thread->reap_queued) {
+            kernel_list_remove(&scheduler_thread_reap_queue,
+                               &thread->reap_node);
+            thread->reap_queued = 0;
+        }
+        scheduler_detach_wait(thread);
+        if (!kernel_smp_thread_active(thread) &&
+            thread->state != KERNEL_THREAD_DEAD) {
+            thread->state = KERNEL_THREAD_ZOMBIE;
+        }
+    }
+}
+
+int kernel_scheduler_stop_current(uint64_t *frame)
+{
+    KernelThread *thread = scheduler_current;
+    if (frame == NULL || thread == NULL || thread->process == NULL ||
+        !thread->process->stop_requested ||
+        thread->process->stop_owner == thread) {
+        return 0;
+    }
+    scheduler_save(thread, frame);
+    scheduler_detach_wait(thread);
+    thread->exit_status = thread->process->faulted
+                              ? thread->process->exit_status : 0;
+    thread->state = KERNEL_THREAD_ZOMBIE;
+    return scheduler_prepare_retire_frame(frame);
 }
 
 static void scheduler_copy_user_image(KernelUserImage *destination,
@@ -1159,9 +1297,19 @@ int kernel_scheduler_exec(uint64_t *frame,
 
     KernelThread *thread = scheduler_current;
     KernelProcess *process = thread->process;
+    scheduler_request_process_stop(process, thread);
+    kernel_smp_reschedule_others();
+    kernel_smp_switch_release();
+    while (kernel_smp_process_other_thread_active(process, thread)) {
+        cvm_fence();
+        cvm_nop();
+    }
+    kernel_smp_switch_reacquire();
     KernelUserImage old_image;
     scheduler_copy_user_image(&old_image, &process->image);
     scheduler_exec_discard_other_threads(process, thread);
+    process->stop_requested = 0;
+    process->stop_owner = NULL;
     kernel_display_release_process(process);
     scheduler_copy_user_image(&process->image, &new_image);
     process->next_stack_slot = 1;
@@ -1197,6 +1345,7 @@ int kernel_scheduler_exec(uint64_t *frame,
     cvm_set_ksp((uint64_t)thread->kernel_stack_top);
     kernel_user_image_destroy(&old_image);
     ++scheduler_exec_count;
+    kernel_smp_reschedule_others();
     return 0;
 }
 
@@ -1225,9 +1374,11 @@ void kernel_scheduler_exit(uint64_t *frame, int64_t status)
         scheduler_record_process_completion(process);
     }
 
+    if (scheduler_retire_secondary_frame(frame)) return;
+
     KernelThread *next = scheduler_dequeue_or_idle();
-    if (next == NULL) scheduler_finish();
-    scheduler_current = next;
+    if (next == NULL) scheduler_complete_or_wait();
+    scheduler_set_current(next);
     scheduler_load(previous, next, frame);
 }
 
@@ -1276,13 +1427,24 @@ void kernel_scheduler_fault(uint64_t *frame,
     process->fault_address = address;
     process->fault_info = info;
     process->faulted = 1;
+    process->stop_owner = NULL;
+    process->stop_requested = 1;
+    kernel_smp_reschedule_others();
+    kernel_smp_switch_release();
+    while (kernel_smp_process_other_thread_active(process, previous)) {
+        cvm_fence();
+        cvm_nop();
+    }
+    kernel_smp_switch_reacquire();
     process->state = KERNEL_PROCESS_ZOMBIE;
     kernel_display_release_process(process);
     scheduler_record_process_completion(process);
 
+    if (scheduler_retire_secondary_frame(frame)) return;
+
     KernelThread *next = scheduler_dequeue_or_idle();
-    if (next == NULL) scheduler_finish();
-    scheduler_current = next;
+    if (next == NULL) scheduler_complete_or_wait();
+    scheduler_set_current(next);
     scheduler_load(previous, next, frame);
 }
 
@@ -1293,10 +1455,11 @@ void kernel_scheduler_timer(uint64_t *frame)
     cvm_mmio_write64((uintptr_t)KERNEL_IRQ_ALIAS + IRQ_CONTROLLER_EOI_OFFSET,
                      KERNEL_TIMER_INTERRUPT_LINE);
     if (frame == NULL) return;
+    if (kernel_scheduler_stop_current(frame)) return;
     ++scheduler_timer_count;
     scheduler_expire_timeouts();
     kernel_scheduler_interrupt_return(frame);
-    if (scheduler_idle_active) {
+    if (kernel_smp_idle_active()) {
         return;
     }
     if ((TRAP_FLAGS(frame) & KERNEL_SAVED_USER_MODE) == 0 ||
@@ -1305,6 +1468,59 @@ void kernel_scheduler_timer(uint64_t *frame)
     }
     scheduler_reap_deferred();
     scheduler_reschedule(frame, 1);
+}
+
+void kernel_scheduler_ipi(uint64_t *frame)
+{
+    if (frame == NULL) return;
+    kernel_scheduler_interrupt_return(frame);
+    if (kernel_scheduler_stop_current(frame)) return;
+    if (kernel_smp_idle_active()) return;
+    if ((TRAP_FLAGS(frame) & KERNEL_SAVED_USER_MODE) == 0 ||
+        kernel_scheduler_current_space() == NULL) {
+        return;
+    }
+    scheduler_reap_deferred();
+    scheduler_reschedule(frame, 1);
+}
+
+void kernel_scheduler_secondary_start(void)
+{
+    kernel_smp_switch_reacquire();
+    if (!scheduler_active) {
+        kernel_smp_switch_release();
+        return;
+    }
+    scheduler_reap_deferred();
+    KernelThread *next = scheduler_dequeue();
+    if (next == NULL) {
+        if (kernel_smp_is_boot_cpu() && !scheduler_has_blocked_thread() &&
+            !kernel_smp_has_running_thread()) {
+            scheduler_finish();
+        }
+        kernel_smp_switch_release();
+        return;
+    }
+    scheduler_set_current(next);
+    ++scheduler_secondary_dispatch_count;
+    if (next->kernel_resume_sp != 0) {
+        uintptr_t resume_sp = next->kernel_resume_sp;
+        next->kernel_resume_sp = 0;
+        cvm_set_ptbr((uint64_t)kernel_address_space_root(
+            next->process->image.address_space));
+        cvm_set_ksp((uint64_t)next->kernel_stack_top);
+        kernel_smp_switch_release();
+        kernel_resume_continuation(resume_sp);
+        return;
+    }
+    uint64_t root = (uint64_t)kernel_address_space_root(
+        next->process->image.address_space);
+    uint64_t pc = next->pc;
+    uint64_t stack = next->stack_pointer;
+    uint64_t kernel_stack = next->kernel_stack_top;
+    const uint64_t *registers = next->registers;
+    kernel_smp_switch_release();
+    kernel_start_user(root, pc, stack, kernel_stack, registers);
 }
 
 static KernelProcess *scheduler_make_init_process(void)
@@ -1400,6 +1616,8 @@ static int scheduler_wait_queue_test(void)
     second.state = KERNEL_THREAD_BLOCKED;
     first.queued = 0;
     second.queued = 0;
+    first.cpu_affinity = 0;
+    second.cpu_affinity = 0;
     first.timeout_queued = 0;
     second.timeout_queued = 0;
     first.wait_pid = 0;
@@ -1471,7 +1689,7 @@ static int scheduler_validate_test_layout(KernelProcess *first,
 {
     if (first == NULL || child == NULL || first->pid != 1 || child->pid == 0 ||
         first->pid == child->pid || first->thread_count != 2 ||
-        child->thread_count != 1 || child->parent != first ||
+        child->thread_count != 2 || child->parent != first ||
         first->children.count != 1 || first->fd_table == NULL ||
         child->fd_table == NULL || first->fd_table == child->fd_table ||
         kernel_fd_open_count(first->fd_table) != 3 ||
@@ -1541,7 +1759,7 @@ static int scheduler_wait_read_test(KernelProcess *process)
 int kernel_scheduler_self_test(void)
 {
     scheduler_active = 0;
-    scheduler_current = NULL;
+    scheduler_set_current(NULL);
     scheduler_init_process = NULL;
     scheduler_process_count = 0;
     scheduler_thread_count = 0;
@@ -1561,9 +1779,10 @@ int kernel_scheduler_self_test(void)
     scheduler_sleep_wake_count = 0;
     scheduler_idle_count = 0;
     scheduler_kernel_block_switch_count = 0;
+    scheduler_secondary_dispatch_count = 0;
+    scheduler_same_process_parallel_count = 0;
     scheduler_completion_error = 0;
     scheduler_init_from_disk = 0;
-    scheduler_idle_active = 0;
     kernel_list_init(&scheduler_processes);
     kernel_list_init(&scheduler_run_queue);
     kernel_list_init(&scheduler_reap_queue);
@@ -1575,7 +1794,7 @@ int kernel_scheduler_self_test(void)
     if (!scheduler_wait_queue_test()) return 1;
     KernelProcess *first = scheduler_make_init_process();
     if (scheduler_init_from_disk) scheduler_init_process = first;
-    KernelProcess *child = scheduler_make_fault_process(first, 1);
+    KernelProcess *child = scheduler_make_fault_process(first, 2);
     if (first != NULL && child != NULL) {
         KernelThread *coordinator = scheduler_process_thread_from_node(
             first->threads.sentinel.next);
@@ -1628,12 +1847,26 @@ int kernel_scheduler_self_test(void)
         scheduler_destroy_processes();
         return 1;
     }
-    scheduler_current = scheduler_dequeue();
+    scheduler_set_current(scheduler_dequeue());
     if (scheduler_current == NULL) {
         scheduler_destroy_processes();
         return 1;
     }
     scheduler_active = 1;
+    if (!kernel_smp_kick_secondaries()) {
+        scheduler_active = 0;
+        scheduler_destroy_processes();
+        return 1;
+    }
+    if (kernel_smp_logical_count() > 1) {
+        for (uint64_t wait = 0;
+             wait < KERNEL_SECONDARY_DISPATCH_WAIT &&
+             scheduler_secondary_dispatch_count == 0;
+             ++wait) {
+            cvm_fence();
+            cvm_nop();
+        }
+    }
     kernel_uart_puts("KERNEL: USER TASKS START\n");
     kernel_start_user(
         kernel_address_space_root(

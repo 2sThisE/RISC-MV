@@ -5,15 +5,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
-#define INTERRUPT_LINE_COUNT 64U
-#define INTERRUPT_EXTERNAL_LINE_COUNT 48U
-#define INTERRUPT_IPI_LINE_BASE INTERRUPT_EXTERNAL_LINE_COUNT
-#define INTERRUPT_IPI_LINE_COUNT \
-    (INTERRUPT_LINE_COUNT - INTERRUPT_IPI_LINE_BASE)
-#define INTERRUPT_EXTERNAL_LINE_MASK \
-    ((UINT64_C(1) << INTERRUPT_EXTERNAL_LINE_COUNT) - 1)
-#define TIMER_INTERRUPT_LINE 0U
-#define UART_INTERRUPT_LINE 1U
+#include "interrupt_protocol.h"
 
 typedef struct {
     atomic_uint_fast64_t pending;

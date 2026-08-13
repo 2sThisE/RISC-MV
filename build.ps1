@@ -392,7 +392,7 @@ function Build-Kernel {
     $kernelCObjects = @()
     foreach ($sourceName in @('kernel_main.c', 'pmm.c', 'mmu.c', 'heap.c',
                                'runtime.c', 'address_space.c', 'user_loader.c',
-                               'process.c',
+                               'process.c', 'smp.c',
                                'devices.c', 'fat32.c', 'rmfs.c', 'vfs.c',
                                'syscall.c', 'scheduler.c', 'exception.c')) {
         $objectName = [System.IO.Path]::ChangeExtension($sourceName, '.o')

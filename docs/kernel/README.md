@@ -23,23 +23,29 @@
    매핑한 뒤 `IRET`으로 실패한 LOAD를 재실행한다.
 8. NULL 읽기, rodata 쓰기, data 페이지 실행을 실제로 시도해 각각
    page-not-present, store permission, instruction permission fault인지 확인한다.
-9. direct-map 뒤의 동적 가상주소에 물리 페이지를 매핑해 16바이트 정렬 kernel
+9. System Information/Core Control을 supervisor alias로 매핑한다. 논리 CPU가
+   둘 이상이면 `0x1E000`의 MMU-off trampoline으로 설정된 모든 secondary를
+   시작한다. CPU별 16KiB stack, PTBR, VBR을 설치해 MMU-on C 진입점과 hardware
+   `WAIT`까지 도달시키고, 전용 IPI 48로 실제 wake/handler/복귀를 확인한다.
+   secondary는 커널 종료 전까지 idle online 상태를 유지하고 종료 경로가 모두
+   `STOP`/`HALTED`를 확인한 뒤 stack을 회수한다.
+10. direct-map 뒤의 동적 가상주소에 물리 페이지를 매핑해 16바이트 정렬 kernel
    heap을 구성하고 allocation 분할·병합·재사용과 다중 페이지 할당을 검사한다.
-10. intrusive list, 동기화 byte queue, bitmap과 spinlock 런타임을 초기화하고
+11. intrusive list, 동기화 byte queue, bitmap과 spinlock 런타임을 초기화하고
     자체 검사를 수행한다.
-11. supervisor kernel mapping을 유지하는 독립 PTBR을 만들고 RISC-MV `.exf`의 CRC,
+12. supervisor kernel mapping을 유지하는 독립 PTBR을 만들고 RISC-MV `.exf`의 CRC,
     주소 범위, segment 중첩과 W^X를 검증해 user RX/R/RW page와 64KiB stack을
     적재한다. guard page와 supervisor mapping의 user 접근 차단도 검사한다.
-12. VIO hub에서 block/키보드/display 장치를 찾고 supervisor MMIO alias로
+13. VIO hub에서 block/키보드/display 장치를 찾고 supervisor MMIO alias로
     매핑한다. GPT의 RMFS system partition을 `/`로 마운트해 긴 이름 경로,
     파일 읽기, 생성, 교체, append와 flush를 검사한다. FAT32 boot partition은
     firmware/bootloader 전용으로 유지한다.
-13. syscall vector 76에 dispatcher를 연결하고 page별 user 권한을 먼저
+14. syscall vector 76에 dispatcher를 연결하고 page별 user 권한을 먼저
     검증하는 `copy_from_user`/`copy_to_user`로 잘못된 포인터와 overflow를
     fault 없이 거부한다. 초기 ABI는 `exit`, FD 기반 `write`/`read`, `yield`,
     `getpid`, `wait`, `waitpid`, `join`, `open`, `close`, `seek`, `fsync`, `exec`,
     timer 기반 `sleep`, `display_mode`와 `display_present`다.
-14. `/BIN/INIT.EXF`를 읽어 PID 1 process로 만들고, 동적
+15. `/BIN/INIT.EXF`를 읽어 PID 1 process로 만들고, 동적
     `KernelProcess`/`KernelThread` 객체로 총 2개 process와 3개 thread를 만든다.
     init의 두 thread는 PTBR을 공유하되 각자 64KiB user stack과 64KiB
     kernel stack을 사용한다. timer IRQ 0에서 전체 GPR, PC, FLAGS와 SP를
@@ -91,6 +97,8 @@ legacy 이름의 `cvmlink`로 `kernel.exf`와 `kernel.map`을 생성한다.
 - `address_space.c`: 프로세스별 page table, user page 매핑과 범위 unmap
 - `user_loader.c`: 고정 가상주소 RISC-MV EXF 사용자 이미지 loader
 - `process.c`: 동적 PID/TID, parent/child Process, Thread stack과 수명 검사
+- `smp.c`: System Info/Core Control 탐색, 88-byte per-CPU 상태, secondary
+  MMU-off trampoline, 전용 stack, BKL과 IPI wake/idle/stop 수명주기
 - `devices.c`: VIO 검색, block/키보드/display와 내장 MMIO 장치 연결
 - `fat32.c`: firmware 호환 FAT32 구현 자료
 - `rmfs.c`, `vfs.c`: RMFS extent/bitmap 파일 읽기·쓰기와 단일 root VFS
@@ -171,10 +179,11 @@ unmap한 뒤 현재 kernel stack에서 벗어난 trap에서 객체와 kernel sta
 관리하며 wake-one/wake-all을 제공한다. timeout tick을 0으로 지정하면 IRQ가
 직접 깨울 때까지 무기한 대기하고, 양수면 timeout queue에도 동시에 등록한다.
 wake와 timeout 중 먼저 처리된 경로가 두 큐에서 thread를 원자적으로 분리하므로
-한 thread가 중복으로 runnable queue에 들어가지 않는다. 현재 단일 코어에서는
-trap 진입으로 interrupt가 꺼진 상태에서 조건을 재검사하고 waiter를 등록해야
-IRQ-before-sleep lost-wakeup이 없다. SMP 도입 시에는 이 구간을 IRQ-safe lock으로
-확장해야 한다.
+한 thread가 중복으로 runnable queue에 들어가지 않는다. SMP 커널 trap은 먼저
+Big Kernel Lock을 얻은 뒤 조건 재검사와 waiter 등록을 수행한다. blocking kernel
+continuation이나 hardware idle로 전환할 때는 BKL을 놓고, 다시 kernel C 문맥으로
+복귀할 때 재획득하므로 IRQ-before-sleep lost-wakeup과 lock을 든 채 수면하는
+교착을 피한다.
 
 IRQ handler는 heap allocation, filesystem 진입, spin 대기나 수면을 하지 않는다.
 block handler는 장치 status/error를 snapshot하고 요청 wait queue 하나를 깨우며,
@@ -189,6 +198,34 @@ handler가 저장된 PC를 idle 복귀 label로 옮겨 이미 처리한 IRQ 뒤 
 스케줄러 IRQ를 발생시킨다. `sleep(milliseconds)`는 2ms timer quantum 단위로 올림해 이
 timeout 경로를 사용한다. `waitpid`/`join`도 마지막 runnable thread를 block할 수
 있으며 `WNOHANG` 옵션은 아직 없다.
+
+설정된 secondary 논리 CPU는 각자의 stack, `current_thread`, kernel-stack owner를
+가지며 global runnable queue에서 user thread를 받아 실제로 실행한다. user mode는
+BKL 밖에서 병렬로 실행하고 syscall/exception/IPI로 kernel에 진입할 때만 공유
+커널 상태를 직렬화한다. IPI 48은 programmable IRQ controller를 거치지 않고 대상
+CPU의 VBR handler로 들어가 WAIT 복귀 PC를 보정한다. 종료나 user fault가 발생한
+secondary는 `IRET`로 architecture exception 상태를 정리한 뒤 영구 idle stack으로
+돌아간다.
+
+같은 process의 서로 다른 thread도 여러 논리 CPU에서 동시에 실행한다. 각 thread는
+첫 dispatch의 논리 CPU에 고정된다. timer가 thread를 runnable queue에 되돌린 뒤에도
+원래 CPU만 다시 선택하므로, 그 CPU가 trap wrapper에서 아직 `IRET` 준비 중인 동안
+다른 CPU가 같은 kernel stack을 사용하는 경쟁이 없다. `exec`와 process fault는
+process stop flag를 세우고 모든 CPU에 IPI를 보낸다. sibling은 다음 trap에서
+supervisor idle 진입점으로 복귀하고 영구 per-CPU stack으로 전환한 뒤에만 active
+소유권을 지운다. 요청 CPU는 이 rendezvous가 끝난 뒤 old address space와 sibling
+kernel stack을 회수한다.
+
+BKL이 scheduler/process/wait queue의 최상위 lock이며 address-space, heap, RMFS,
+FD/vnode와 device lock은 BKL 안쪽에서만 얻는다. 수면, user 실행과 보존된 kernel
+continuation 사이의 전환에는 BKL을 들고 가지 않는다. affinity가 정해진 runnable
+wake는 그 논리 CPU에 직접 IPI를 보내고, 미지정 thread는 idle CPU 하나를 깨운다.
+process stop은 다른 CPU 전부에 reschedule IPI를 보낸다.
+현재 MMU는 TLB cache 없이 매 접근마다 page table을 읽으므로 별도 TLB shootdown은
+필요하지 않다. 향후 TLB를 넣을 때 ASID/generation과 shootdown acknowledgment가
+함께 필요하다. timer tick과 외부 device IRQ는 Core 0/Thread 0이 담당하고 각 논리
+CPU는 자기 user trap과 IPI를 처리한다. 같은 core의 hardware thread는 host의
+core-local round-robin 실행 모델을, 다른 core는 host thread 병렬 실행 모델을 따른다.
 
 현재 VFS는 RMFS system partition을 `/`로 마운트한다. RMFS는 최대 239바이트
 case-sensitive 이름, 256바이트 inode, inline extent 6개, inode/block bitmap과

@@ -59,7 +59,8 @@
 부모 없는 zombie는 안전한 다음 trap에서 수거한다. parent/child와 process
 `wait`/`waitpid`, thread `join`의 `BLOCKED -> RUNNABLE` wakeup은 구현됐다.
 process별 file descriptor와 transactional `exec`, 일반 wait queue, timer sleep과
-hardware idle도 구현됐으며 SMP kernel scheduler는 아직 없다.
+hardware idle도 구현됐다. SMP scheduler의 첫 단계로 global runnable queue와
+Big Kernel Lock을 사용해 서로 다른 process를 여러 논리 CPU에 배분한다.
 
 ## P0 — 현재 차단 항목
 
@@ -234,20 +235,55 @@ regular file을 읽고 생성·교체할 수 있어야 한다. 일반 파일시�
 
 ## P1.4 — SMP kernel과 hardware-thread 활용
 
-P1.3은 먼저 Core 0/Thread 0에서 완성한다. 그 뒤 VM에 이미 있는 가상
+P1.3은 먼저 Core 0/Thread 0에서 완성한다. 그 뒤 RISC-MV machine에 이미 있는
 core/hardware-thread 기능을 kernel scheduler에 연결한다.
 
-- [ ] Core Control MMIO로 secondary hardware thread를 명시적으로 online
-- [ ] per-CPU current thread, kernel stack, scheduler와 interrupt 상태
-- [ ] global queue 또는 per-CPU run queue 정책과 load balancing
-- [ ] scheduler/PMM/heap/VFS/FD/device 상태의 SMP lock 계층과 순서 정의
-- [ ] IPI reschedule, stop과 TLB shootdown protocol
-- [ ] IRQ affinity/routing과 timer tick의 core별 책임
-- [ ] 같은 core의 hardware thread와 다른 core의 병렬 실행 차이 문서화
-- [ ] 2C1T, 2C2T, 최대 구성과 lock contention stress test
+### P1.4-A — secondary bootstrap 기반 — 완료
+
+- [x] host 구현 타입과 분리된 guest-safe System Info/Core Control protocol header
+- [x] 고정 저메모리 trampoline에서 CPU별 stack, PTBR, VBR 설정 후 MMU-on 진입
+- [x] `COREID`/`THREADID` 기반 최대 64C×8T per-CPU bootstrap 상태 구조
+- [x] 추가 CPU가 없으면 stack 메모리를 소비하지 않는 지연 할당
+- [x] 첫 secondary의 Core Control `START -> WAITING -> STOP -> HALTED` 검사
+- [x] 2C1T 실제 host 병렬 core와 1C2T core-local round-robin 부팅 회귀
+
+이 단계는 secondary가 안전하게 kernel C 코드에 진입할 수 있음을 검증한다.
+secondary는 회귀 직후 정지되며 user thread를 배분하는 SMP scheduler는 다음
+단계에서 구현한다.
+
+### P1.4-B — secondary online과 per-CPU 기반 — 완료
+
+- [x] 설정된 모든 secondary hardware thread를 Core Control MMIO로 시작해
+  kernel 종료 전까지 `WAIT` idle 상태로 online 유지
+- [x] 논리 CPU별 독립 16KiB bootstrap/idle stack과 88-byte per-CPU record
+  (`state`, current/kernel-stack thread, trap/IPI/idle 횟수와 BKL/idle 상태)
+- [x] 외부 장치 IRQ 0~47과 분리된 IPI 48~63 VBR handler 및 IPI 48 wake 회귀
+- [x] scheduler 종료와 오류 경로에서 모든 secondary에 `STOP`, `HALTED` 확인,
+  per-CPU stack 회수
+- [x] 1C1T, 1C2T, 2C1T, 2C2T 실제 부팅과 전체 36개 host test 통과
+
+이 단계에서 마련한 secondary 수명주기와 per-CPU 상태는 P1.4-C의 실제 user
+dispatch 기반으로 이어진다.
+
+### P1.4-C — SMP scheduler와 공유 상태 동기화 — 완료
+
+- [x] global runnable queue와 Big Kernel Lock 기반 첫 SMP scheduling 정책
+- [x] per-CPU current thread/KSP 소유권, secondary user 진입과 안전한 retire 경로
+- [x] 같은 process의 서로 다른 thread와 서로 다른 process의 실제 병렬 실행
+- [x] BKL 밖 user 실행, trap 진입 직렬화, blocking continuation에서 lock 해제 규칙
+- [x] `exec`와 process fault의 sibling stop/rendezvous 및 idle-stack retire
+- [x] BKL을 최상위로 두고 address-space/heap/VFS/FD/device lock을 내부에서 얻는 순서
+- [x] runnable wake IPI와 process stop reschedule IPI
+- [x] 현재 TLB cache가 없는 page-walk 구현에서는 shootdown이 불필요함을 명시
+- [x] 외부 IRQ와 timer는 Core 0/Thread 0, user trap/IPI는 각 논리 CPU가 처리
+- [x] 같은 core의 hardware thread와 다른 core의 병렬 실행 차이 문서화
+- [x] 1C1T, 1C2T, 2C1T, 2C2T와 8C8T(64 logical CPU) boot regression
+- [x] 2C2T 반복 `exec`/fault/rendezvous와 lock contention 회귀
 
 완료 조건: 둘 이상의 가상 core가 동일 RAM과 kernel을 안전하게 공유하며 서로
-다른 runnable thread를 실제 host 병렬성으로 실행해야 한다.
+다른 runnable thread를 실제 host 병렬성으로 실행한다. thread는 첫 dispatch CPU에
+고정해 같은 kernel stack이 IRET 전 다른 CPU로 migration되지 않게 하며, process
+전체 address-space를 교체하거나 폐기하기 전에는 IPI rendezvous로 sibling을 멈춘다.
 
 ## P1.5 — 최소 userland와 C runtime
 
@@ -265,7 +301,7 @@ core/hardware-thread 기능을 kernel scheduler에 연결한다.
 
 ### P2-A — Clang IR 변환 범위와 최적화
 
-- [ ] indirect call, `switch`와 memory intrinsic lowering
+- [x] indirect call, `switch`와 memory intrinsic lowering
 - [ ] float/vector IR과 scalar/vector cast lowering
 - [ ] variadic callee `va_start/va_arg`와 aggregate SSA return
 - [ ] RArchM64 integer legalization 뒤 `-O1` 이상 IR 허용
@@ -340,6 +376,6 @@ version, object metadata, tool 진단과 호환성 테스트를 함께 변경한
 
 ## 바로 시작할 작업
 
-1. P1.4 secondary hardware thread online과 per-CPU 상태 구조 설계
-2. scheduler/PMM/heap/VFS/device lock 계층과 IRQ affinity 정책 확정
-3. 2C1T 최소 SMP 문맥 교환과 IPI reschedule 회귀 테스트
+1. P1.5 user syscall wrapper와 최소 C runtime 시작
+2. BKL contention 계측 후 필요할 때 scheduler/PMM/VFS 세부 lock으로 성능 분해
+3. TLB cache를 도입할 때 ASID와 shootdown generation protocol 추가

@@ -92,24 +92,28 @@ LLVM IR을 직접 변환하는 저수준 명령은 다음과 같다. `cvmir.exe`
 
 - `i1`, `i8`, `i16`, `i32`, `i64`와 64비트 pointer
 - 정수 산술·논리·shift, `icmp`, `select`, 정수 cast
-- basic block, `phi`, 조건·무조건 분기
+- basic block, `phi`, 조건·무조건 분기와 LLVM `lower-switch` pass를 통한
+  `switch` lowering
 - `alloca`, scalar `load/store`, volatile MMIO 접근
 - array/structure `getelementptr`와 전역 `.rodata/.data/.bss`
-- 직접 함수 호출, scalar register/stack argument, void/scalar return
+- 직접 함수 호출 및 간접 함수 호출 (`CALLR`), scalar register/stack argument,
+  void/scalar return
+- LLVM memory intrinsic (`llvm.memcpy`, `llvm.memset`, `llvm.memmove`)을
+  `libcvm.a` runtime helper 호출로 lowering
 - variadic 호출에서 unnamed argument의 stack 전달
 - Clang의 `sret` hidden pointer처럼 IR에 명시된 pointer parameter
 - weak/common/external symbol과 `CVMOBJ2` relocation
 - `<cvm/intrin.h>`로 노출되는 CPU 제어·상태 조회·64비트 원자 명령
 
 각 SSA 값은 정확성 우선으로 8바이트 stack slot에 spill한다. R14를 frame
-pointer로 사용하고 CALL 직전 SP를 16바이트로 정렬한다. `cvmclang`은 현재
-`-O0`을 사용한다. 최적화 IR은 i65 같은 RISC-MV 비정규 정수 폭을 만들 수 있으므로
-legalization pass가 생기기 전에는 기본 경로로 사용하지 않는다.
+pointer로 사용하고 CALL 직전 SP를 16바이트로 정렬한다. `cvmclang`은 아직
+`-O0`을 사용한다. `switch` 정규화용 제한된 LLVM pass는 실행하지만 일반
+`-O1` IR은 integer legalization과 differential test가 끝날 때까지 지원 범위로
+간주하지 않는다.
 
-아직 지원하지 않는 범위는 floating/vector IR, `switch`, indirect call,
-LLVM memory intrinsic, aggregate SSA return, 동적 `alloca`, variadic 함수 내부의
-`va_start/va_arg`다. 이 기능을 만나면 잘못된 코드를 생성하지 않고 오류로
-중단한다.
+아직 지원하지 않는 범위는 floating/vector IR, aggregate SSA return, 동적 `alloca`,
+variadic 함수 내부의 `va_start/va_arg`다. 이 기능을 만나면 잘못된 코드를 생성하지 않고
+오류로 중단한다.
 
 ## CPU intrinsic
 

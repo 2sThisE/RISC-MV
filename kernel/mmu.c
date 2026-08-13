@@ -133,7 +133,7 @@ static int map_range(uintptr_t root,
     return 0;
 }
 
-static uintptr_t kernel_symbol_physical(const void *symbol)
+uintptr_t kernel_symbol_physical_address(const void *symbol)
 {
     uintptr_t virtual_address = (uintptr_t)symbol;
     uintptr_t virtual_base =
@@ -154,7 +154,7 @@ static int map_kernel_range(uintptr_t root,
 {
     uintptr_t virtual_start = (uintptr_t)start;
     uintptr_t virtual_end = (uintptr_t)end;
-    uintptr_t physical_start = kernel_symbol_physical(start);
+    uintptr_t physical_start = kernel_symbol_physical_address(start);
     if (physical_start == 0 || virtual_end < virtual_start) return 1;
     return map_range(root,
                      virtual_start,

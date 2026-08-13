@@ -2,9 +2,11 @@
 #include "bus.h"
 #include "cpu.h"
 #include "cvmir.h"
+#include "object_assembler.h"
 #include "ram.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -274,6 +276,197 @@ int test_ir_translator(void)
         assert(cpu_step(&cpu, &bus));
     }
     assert(cpu.registers[0] == 42);
+    assert(cpu.registers[REGISTER_SP] == sizeof(memory));
+    assembly_result_destroy(&binary);
+    free(raw_source);
+    free(assembly);
+
+    static const char p2a_source[] =
+        "target datalayout = \"" CVM_LLVM_DATA_LAYOUT "\"\n"
+        "target triple = \"" RARCH_M64_LLVM_TARGET_TRIPLE "\"\n"
+        "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n"
+        "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n"
+        "declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\n"
+        "define i64 @fn_a(i64 %x) {\n"
+        "entry:\n"
+        "  %r = add i64 %x, 10\n"
+        "  ret i64 %r\n"
+        "}\n"
+        "define i64 @fn_b(i64 %x) {\n"
+        "entry:\n"
+        "  %r = add i64 %x, 20\n"
+        "  ret i64 %r\n"
+        "}\n"
+        "define i64 @switch_eval(i32 %code) {\n"
+        "entry:\n"
+        "  switch i32 %code, label %sw.default [\n"
+        "    i32 1, label %sw.bb1\n"
+        "    i32 2, label %sw.bb2\n"
+        "  ]\n"
+        "sw.bb1:\n"
+        "  ret i64 100\n"
+        "sw.bb2:\n"
+        "  ret i64 200\n"
+        "sw.default:\n"
+        "  ret i64 300\n"
+        "}\n"
+        "define i64 @p2a_test() {\n"
+        "entry:\n"
+        "  %fn_ptr_a = alloca ptr, align 8\n"
+        "  %fn_ptr_b = alloca ptr, align 8\n"
+        "  store ptr @fn_a, ptr %fn_ptr_a, align 8\n"
+        "  store ptr @fn_b, ptr %fn_ptr_b, align 8\n"
+        "  %fp_a = load ptr, ptr %fn_ptr_a, align 8\n"
+        "  %res_a = call i64 %fp_a(i64 5)\n"
+        "  %fp_b = load ptr, ptr %fn_ptr_b, align 8\n"
+        "  %res_b = call i64 %fp_b(i64 5)\n"
+        "  %ind_sum = add i64 %res_a, %res_b\n"
+        "  %s1 = call i64 @switch_eval(i32 1)\n"
+        "  %s2 = call i64 @switch_eval(i32 2)\n"
+        "  %sdef = call i64 @switch_eval(i32 99)\n"
+        "  %sw_sum = add i64 %s1, %s2\n"
+        "  %sw_total = add i64 %sw_sum, %sdef\n"
+        "  %buf_src = alloca [4 x i8], align 4\n"
+        "  %buf_dst = alloca [4 x i8], align 4\n"
+        "  %buf_fill = alloca [4 x i8], align 4\n"
+        "  %src0 = getelementptr inbounds [4 x i8], ptr %buf_src, i64 0, i64 0\n"
+        "  %src1 = getelementptr inbounds [4 x i8], ptr %buf_src, i64 0, i64 1\n"
+        "  %src2 = getelementptr inbounds [4 x i8], ptr %buf_src, i64 0, i64 2\n"
+        "  %src3 = getelementptr inbounds [4 x i8], ptr %buf_src, i64 0, i64 3\n"
+        "  store i8 1, ptr %src0, align 1\n"
+        "  store i8 2, ptr %src1, align 1\n"
+        "  store i8 3, ptr %src2, align 1\n"
+        "  store i8 4, ptr %src3, align 1\n"
+        "  call void @llvm.memset.p0.i64(ptr %buf_fill, i8 9, i64 4, i1 false)\n"
+        "  call void @llvm.memcpy.p0.p0.i64(ptr %buf_dst, ptr %buf_src, i64 4, i1 false)\n"
+        "  %dst0 = getelementptr inbounds [4 x i8], ptr %buf_dst, i64 0, i64 0\n"
+        "  %dst1 = getelementptr inbounds [4 x i8], ptr %buf_dst, i64 0, i64 1\n"
+        "  call void @llvm.memmove.p0.p0.i64(ptr %dst1, ptr %dst0, i64 3, i1 false)\n"
+        "  %dst2 = getelementptr inbounds [4 x i8], ptr %buf_dst, i64 0, i64 2\n"
+        "  %dst3 = getelementptr inbounds [4 x i8], ptr %buf_dst, i64 0, i64 3\n"
+        "  %fill0 = getelementptr inbounds [4 x i8], ptr %buf_fill, i64 0, i64 0\n"
+        "  %v0 = load i8, ptr %dst0, align 1\n"
+        "  %v1 = load i8, ptr %dst1, align 1\n"
+        "  %v2 = load i8, ptr %dst2, align 1\n"
+        "  %v3 = load i8, ptr %dst3, align 1\n"
+        "  %vf = load i8, ptr %fill0, align 1\n"
+        "  %x0 = zext i8 %v0 to i64\n"
+        "  %x1 = zext i8 %v1 to i64\n"
+        "  %x2 = zext i8 %v2 to i64\n"
+        "  %x3 = zext i8 %v3 to i64\n"
+        "  %xf = zext i8 %vf to i64\n"
+        "  %w0 = mul i64 %x0, 1000\n"
+        "  %w1 = mul i64 %x1, 100\n"
+        "  %w2 = mul i64 %x2, 10\n"
+        "  %m0 = add i64 %w0, %w1\n"
+        "  %m1 = add i64 %w2, %x3\n"
+        "  %memory = add i64 %m0, %m1\n"
+        "  %memory_fill = add i64 %memory, %xf\n"
+        "  %t1 = add i64 %ind_sum, %sw_total\n"
+        "  %final = add i64 %t1, %memory_fill\n"
+        "  ret i64 %final\n"
+        "}\n";
+    int p2a_translated = cvmir_translate(
+        p2a_source, &options, &assembly, &error);
+    if (!p2a_translated) {
+        fprintf(stderr, "P2-A translation failed: %s\n", error.message);
+    }
+    assert(p2a_translated);
+    assert(strstr(assembly, "CALLR R11") != NULL);
+    assert(strstr(assembly, ".extern memset") != NULL);
+    assert(strstr(assembly, ".extern memcpy") != NULL);
+    assert(strstr(assembly, ".extern memmove") != NULL);
+    assert(strstr(assembly, "CALLREL memset") != NULL);
+    assert(strstr(assembly, "CALLREL memcpy") != NULL);
+    assert(strstr(assembly, "CALLREL memmove") != NULL);
+    CvmObjectFile p2a_object = {0};
+    assert(assembler_assemble_object(assembly, &p2a_object,
+                                     &assembly_error));
+    unsigned runtime_symbols = 0;
+    for (size_t i = 0; i < p2a_object.symbol_count; ++i) {
+        const CvmObjectSymbol *symbol = &p2a_object.symbols[i];
+        if (symbol->section_index != CVM_OBJECT_UNDEFINED_SECTION) continue;
+        if (strcmp(symbol->name, "memcpy") == 0) runtime_symbols |= 1U;
+        if (strcmp(symbol->name, "memset") == 0) runtime_symbols |= 2U;
+        if (strcmp(symbol->name, "memmove") == 0) runtime_symbols |= 4U;
+    }
+    assert(runtime_symbols == 7U);
+    cvm_object_destroy(&p2a_object);
+    static const char p2a_entry[] =
+        "MOVI64 SP, 8192\n"
+        "CALL p2a_test\n"
+        "HALT\n"
+        "memcpy:\n"
+        "    MOV R3, R0\n"
+        ".p2a_memcpy_loop:\n"
+        "    CMPI32 R2, 0\n"
+        "    JZ .p2a_memcpy_done\n"
+        "    LOAD8U R4, R1\n"
+        "    STORE8 R0, R4\n"
+        "    ADDI32 R0, 1\n"
+        "    ADDI32 R1, 1\n"
+        "    ADDI32 R2, -1\n"
+        "    JUMP .p2a_memcpy_loop\n"
+        ".p2a_memcpy_done:\n"
+        "    MOV R0, R3\n"
+        "    RET\n"
+        "memset:\n"
+        "    MOV R3, R0\n"
+        ".p2a_memset_loop:\n"
+        "    CMPI32 R2, 0\n"
+        "    JZ .p2a_memset_done\n"
+        "    STORE8 R0, R1\n"
+        "    ADDI32 R0, 1\n"
+        "    ADDI32 R2, -1\n"
+        "    JUMP .p2a_memset_loop\n"
+        ".p2a_memset_done:\n"
+        "    MOV R0, R3\n"
+        "    RET\n"
+        "memmove:\n"
+        "    MOV R3, R0\n"
+        "    CMP R0, R1\n"
+        "    JLTU .p2a_memmove_forward\n"
+        "    JZ .p2a_memmove_done\n"
+        "    ADD R0, R2\n"
+        "    ADD R1, R2\n"
+        ".p2a_memmove_backward_loop:\n"
+        "    CMPI32 R2, 0\n"
+        "    JZ .p2a_memmove_done\n"
+        "    ADDI32 R0, -1\n"
+        "    ADDI32 R1, -1\n"
+        "    LOAD8U R4, R1\n"
+        "    STORE8 R0, R4\n"
+        "    ADDI32 R2, -1\n"
+        "    JUMP .p2a_memmove_backward_loop\n"
+        ".p2a_memmove_forward:\n"
+        "    CMPI32 R2, 0\n"
+        "    JZ .p2a_memmove_done\n"
+        "    LOAD8U R4, R1\n"
+        "    STORE8 R0, R4\n"
+        "    ADDI32 R0, 1\n"
+        "    ADDI32 R1, 1\n"
+        "    ADDI32 R2, -1\n"
+        "    JUMP .p2a_memmove_forward\n"
+        ".p2a_memmove_done:\n"
+        "    MOV R0, R3\n"
+        "    RET\n";
+    raw_source = ir_make_raw_source(assembly, p2a_entry);
+    assert(assembler_assemble(raw_source, 1, &binary, &assembly_error));
+    assert(binary.size < sizeof(memory) - 1);
+    memset(memory, 0, sizeof(memory));
+    memcpy(memory + 1, binary.data, binary.size);
+    assert(bus_init(&bus, &ram));
+    assert(cpu_init(&cpu, &ram));
+    cpu.pc = 1;
+    steps = 0;
+    while (!cpu.halted) {
+        assert(++steps < 10000);
+        assert(cpu_step(&cpu, &bus));
+    }
+    /* res_a = 15, res_b = 25 -> ind_sum = 40 */
+    /* s1 = 100, s2 = 200, sdef = 300 -> sw_total = 600 */
+    /* memmove makes dst={1,1,2,3}; memset contributes 9. */
+    assert(cpu.registers[0] == 1772);
     assert(cpu.registers[REGISTER_SP] == sizeof(memory));
     assembly_result_destroy(&binary);
     free(raw_source);

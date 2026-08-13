@@ -421,6 +421,7 @@ void kernel_devices_interrupt(uint64_t *frame)
                          IRQ_CONTROLLER_EOI_OFFSET, line);
     }
     kernel_scheduler_interrupt_return(frame);
+    (void)kernel_scheduler_stop_current(frame);
 }
 
 int kernel_devices_enable_interrupts(void)

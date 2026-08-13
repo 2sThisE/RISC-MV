@@ -15,6 +15,11 @@ static uintptr_t kernel_vbr;
 #define EXCEPTION_TRAP_PC(frame) ((frame)[16])
 #define EXCEPTION_TRAP_FLAGS(frame) ((frame)[17])
 
+uintptr_t kernel_vector_base(void)
+{
+    return kernel_vbr;
+}
+
 static int has_all(uint64_t value, uint64_t required)
 {
     return (value & required) == required;
@@ -38,8 +43,13 @@ int kernel_exception_init(void)
         (uint64_t)(uintptr_t)kernel_syscall_entry;
     vectors[KERNEL_TIMER_INTERRUPT_LINE] =
         (uint64_t)(uintptr_t)kernel_timer_entry;
-    for (size_t i = 1; i < KERNEL_VECTOR_EXCEPTION_BASE; ++i) {
+    for (size_t i = 1; i < INTERRUPT_EXTERNAL_LINE_COUNT; ++i) {
         vectors[i] = (uint64_t)(uintptr_t)kernel_device_irq_entry;
+    }
+    for (size_t i = INTERRUPT_IPI_LINE_BASE;
+         i < INTERRUPT_LINE_COUNT;
+         ++i) {
+        vectors[i] = (uint64_t)(uintptr_t)kernel_ipi_entry;
     }
 
     cvm_set_vbr((uint64_t)kernel_vbr);
@@ -178,6 +188,7 @@ int kernel_handle_page_fault(uint64_t *return_pc)
 int kernel_exception_dispatch(uint64_t *frame)
 {
     if (frame == NULL) return 1;
+    if (kernel_scheduler_stop_current(frame)) return 0;
     uint64_t cause = cvm_exception_cause();
     uint64_t address = cvm_exception_address();
     uint64_t info = cvm_exception_info();

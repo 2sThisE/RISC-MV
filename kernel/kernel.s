@@ -12,6 +12,7 @@
 .global kernel_syscall_entry
 .global kernel_timer_entry
 .global kernel_device_irq_entry
+.global kernel_ipi_entry
 .global kernel_idle_wait
 .global kernel_idle_wait_instruction
 .global kernel_idle_wait_resume
@@ -19,6 +20,11 @@
 .global kernel_switch_continuation
 .global kernel_resume_continuation
 .global kernel_start_user
+.global kernel_secondary_trampoline
+.global kernel_secondary_trampoline_end
+.global kernel_secondary_table_load
+.global kernel_secondary_restart
+.global kernel_secondary_retire_entry
 .global kernel_probe_null_load
 .global kernel_probe_rodata_store
 .global kernel_probe_data_execute
@@ -34,6 +40,12 @@
 .extern kernel_syscall_dispatch
 .extern kernel_scheduler_timer
 .extern kernel_devices_interrupt
+.extern kernel_smp_trap_enter
+.extern kernel_smp_trap_leave
+.extern kernel_smp_ipi_interrupt
+.extern kernel_smp_secondary_retire
+.extern kernel_smp_retire_finalize
+.extern kernel_secondary_main
 .extern kernel_stack_top
 .type kernel_main, function
 .type kernel_exception_dispatch, function
@@ -45,6 +57,50 @@ kernel_entry:
     MOVI64 SP, kernel_stack_top
     CALLREL kernel_main
     MOV R3, R0
+    HALT
+
+; Secondary hardware threads start with MMU off, SP=0 and no register
+; arguments. This page is temporarily identity-mapped by kernel/smp.c.
+; The MOVI64 operand is patched once with the physical bootstrap table
+; address before any secondary is started.
+kernel_secondary_trampoline:
+    COREID R0
+    THREADID R1
+kernel_secondary_table_load:
+    MOVI64 R2, 0
+    MOV R5, R2
+    LOAD64O R3, R5, 0           ; threads_per_core
+    MUL R0, R3
+    ADD R0, R1                  ; logical processor index
+    MOVI32U R3, 88
+    MUL R0, R3                  ; sizeof(KernelCpuLocal) = 88
+    ADD R2, R0
+    ADDI32 R2, 40               ; offsetof(KernelSmpBootstrap, cpus)
+    LOAD64O SP, R2, 0           ; aligned bootstrap stack top
+    LOAD64O R4, R5, 16          ; physical PTBR
+    LOAD64O R6, R5, 24          ; physical VBR
+    LOAD64O R7, R5, 32          ; virtual kernel_secondary_main
+    SETPTBR R4
+    SETVBR R6
+    SETKSP SP
+    MMUON
+    CALLR R7
+    HALT
+kernel_secondary_trampoline_end:
+
+; Abandon a completed secondary user's kernel stack and resume the permanent
+; bootstrap/idle context. This never returns to the retired trap frame.
+kernel_secondary_restart:
+    MOV SP, R0
+    CALLREL kernel_smp_retire_finalize
+    JUMPREL kernel_secondary_main
+    HALT
+
+; Target of an IRET-modified syscall/exception frame. IRET first clears the
+; architectural exception-active state, then this entry abandons the retired
+; thread stack through kernel_smp_secondary_retire.
+kernel_secondary_retire_entry:
+    CALLREL kernel_smp_secondary_retire
     HALT
 
 ; Non-recoverable exception entry. The CPU exception frame made SP aligned for
@@ -75,10 +131,12 @@ kernel_page_fault_entry:
     PUSH R14
     ADDI32 SP, -8
 
+    CALLREL kernel_smp_trap_enter
     MOV R0, SP
     CALLREL kernel_exception_dispatch
     CMPI32 R0, 0
     BRCC NE, kernel_page_fault_fatal
+    CALLREL kernel_smp_trap_leave
 
     ADDI32 SP, 8
     POP R14
@@ -122,8 +180,10 @@ kernel_syscall_entry:
     PUSH R13
     PUSH R14
     ADDI32 SP, -8
+    CALLREL kernel_smp_trap_enter
     MOV R0, SP
     CALLREL kernel_syscall_dispatch
+    CALLREL kernel_smp_trap_leave
     JUMPREL kernel_trap_restore
 
 kernel_timer_entry:
@@ -143,8 +203,10 @@ kernel_timer_entry:
     PUSH R13
     PUSH R14
     ADDI32 SP, -8
+    CALLREL kernel_smp_trap_enter
     MOV R0, SP
     CALLREL kernel_scheduler_timer
+    CALLREL kernel_smp_trap_leave
 
     JUMPREL kernel_trap_restore
 
@@ -165,8 +227,34 @@ kernel_device_irq_entry:
     PUSH R13
     PUSH R14
     ADDI32 SP, -8
+    CALLREL kernel_smp_trap_enter
     MOV R0, SP
     CALLREL kernel_devices_interrupt
+    CALLREL kernel_smp_trap_leave
+
+    JUMPREL kernel_trap_restore
+
+kernel_ipi_entry:
+    PUSH R0
+    PUSH R1
+    PUSH R2
+    PUSH R3
+    PUSH R4
+    PUSH R5
+    PUSH R6
+    PUSH R7
+    PUSH R8
+    PUSH R9
+    PUSH R10
+    PUSH R11
+    PUSH R12
+    PUSH R13
+    PUSH R14
+    ADDI32 SP, -8
+    CALLREL kernel_smp_trap_enter
+    MOV R0, SP
+    CALLREL kernel_smp_ipi_interrupt
+    CALLREL kernel_smp_trap_leave
 
 kernel_trap_restore:
     ADDI32 SP, 8

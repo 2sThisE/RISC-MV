@@ -122,6 +122,8 @@ staging 시작은 아래로 이동하고, 커널 메모리가 커지면 kernel e
 
 ```text
 0x00000..0x1FFFF  firmware/BootInfo 작업 영역
+  0x1E000..0x1EFFF  kernel secondary CPU trampoline 예약
+  0x1F000..0x1FFFF  kernel 초기 exception stack 예약
 0x20000..0x2FFFF  2차 부트로더 코드와 downward stack 슬롯
 kernel_phys_base..kernel_end  동적으로 배치된 kernel LOAD/BSS/stack
 kernel_end..initial_pt_end  임시 page table (handoff 뒤 reclaimable)

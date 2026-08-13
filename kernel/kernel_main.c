@@ -121,6 +121,7 @@ static int validate_boot_info(CvmBootInfo *info, uint64_t handoff_magic)
 
 static int fail(const char *message)
 {
+    (void)kernel_smp_shutdown_secondary();
     kernel_uart_puts(message);
     return 1;
 }
@@ -128,7 +129,6 @@ static int fail(const char *message)
 int kernel_main(CvmBootInfo *info, uint64_t handoff_magic,
                 uint64_t boot_thread_id)
 {
-    (void)boot_thread_id;
     if (validate_boot_info(info, handoff_magic) != 0) {
         return fail("KERNEL ERROR: BootInfo\n");
     }
@@ -180,6 +180,11 @@ int kernel_main(CvmBootInfo *info, uint64_t handoff_magic,
         return fail("KERNEL ERROR: exception init\n");
     }
     kernel_uart_puts("KERNEL: VBR OK\n");
+
+    if (kernel_smp_bootstrap_test(boot_thread_id) != 0) {
+        return fail("KERNEL ERROR: SMP bootstrap\n");
+    }
+    kernel_uart_puts("KERNEL: SMP BOOTSTRAP OK\n");
 
     if (kernel_syscall_self_test() != 0) {
         return fail("KERNEL ERROR: syscall/user-copy self-test\n");

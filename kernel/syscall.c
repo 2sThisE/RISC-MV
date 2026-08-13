@@ -442,7 +442,8 @@ static int syscall_exec(uint64_t *frame,
 
 void kernel_syscall_dispatch(uint64_t *frame)
 {
-    if (frame == NULL || kernel_scheduler_current_space() == NULL) return;
+    if (frame == NULL || kernel_scheduler_stop_current(frame) ||
+        kernel_scheduler_current_space() == NULL) return;
     kernel_scheduler_syscall_enter(frame);
     uint64_t number = TRAP_REGISTER(frame, 0);
     uint64_t argument1 = TRAP_REGISTER(frame, 1);

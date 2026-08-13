@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "boot_format.h"
+#include "interrupt_protocol.h"
 #include "kernel_runtime.h"
 #include "rarchm64_syscall.h"
 
@@ -70,11 +71,14 @@
 #define KERNEL_VIO_ALIAS UINT64_C(0x3F000000)
 #define KERNEL_IRQ_ALIAS UINT64_C(0x3F001000)
 #define KERNEL_TIMER_ALIAS UINT64_C(0x3F002000)
+#define KERNEL_SYSTEM_INFO_ALIAS UINT64_C(0x3F003000)
+#define KERNEL_CORE_CONTROL_ALIAS UINT64_C(0x3F004000)
 #define KERNEL_EXTERNAL_MMIO_BASE UINT64_C(0x3F100000)
 #define KERNEL_EXTERNAL_MMIO_STRIDE UINT64_C(0x10000)
 #define KERNEL_DIRECT_MAP_BASE UINT64_C(0x100000000)
 #define KERNEL_DEMAND_TEST_ADDRESS UINT64_C(0x0000007FFFFFE000)
 #define KERNEL_EXCEPTION_STACK_TOP UINT64_C(0x20000)
+#define KERNEL_SMP_TRAMPOLINE_ADDRESS UINT64_C(0x1E000)
 
 extern CvmBootInfo *kernel_boot_info;
 extern CvmBootVirtualHandoff kernel_virtual_handoff;
@@ -249,6 +253,8 @@ void kernel_scheduler_fault(uint64_t *frame,
                             uint64_t info);
 void kernel_scheduler_note_write(void);
 void kernel_scheduler_timer(uint64_t *frame);
+void kernel_scheduler_ipi(uint64_t *frame);
+void kernel_scheduler_secondary_start(void);
 int kernel_scheduler_self_test(void);
 
 void *kernel_phys_to_virt(uintptr_t physical_address);
@@ -258,13 +264,47 @@ int kernel_map_page(uintptr_t root, uintptr_t virtual_address,
                     uintptr_t physical_address, uint64_t flags);
 int kernel_bootstrap_mmu(void);
 uintptr_t kernel_page_table_root(void);
+uintptr_t kernel_symbol_physical_address(const void *symbol);
 
 int kernel_exception_init(void);
+uintptr_t kernel_vector_base(void);
 int kernel_memory_protection_self_test(void);
 int kernel_demand_page_self_test(void);
 int kernel_handle_page_fault(uint64_t *return_pc);
 int kernel_exception_dispatch(uint64_t *frame);
 void kernel_exception_panic(void);
+
+int kernel_smp_bootstrap_test(uint64_t boot_thread_id);
+int kernel_smp_runtime_valid(void);
+void kernel_secondary_main(void);
+void kernel_smp_set_current_thread(KernelThread *thread);
+KernelThread *kernel_smp_current_thread(void);
+int kernel_smp_thread_active(const KernelThread *thread);
+int kernel_smp_process_active(const KernelProcess *process);
+int kernel_smp_process_other_thread_active(const KernelProcess *process,
+                                           const KernelThread *owner);
+int kernel_smp_has_running_thread(void);
+uint64_t kernel_smp_logical_count(void);
+uint64_t kernel_smp_current_logical_id(void);
+int kernel_smp_is_boot_cpu(void);
+int kernel_smp_idle_active(void);
+void kernel_smp_idle_enter(void);
+void kernel_smp_idle_leave(void);
+void kernel_smp_trap_enter(void);
+void kernel_smp_trap_leave(void);
+void kernel_smp_switch_release(void);
+void kernel_smp_switch_reacquire(void);
+void kernel_smp_ipi_interrupt(uint64_t *frame);
+int kernel_smp_kick_secondaries(void);
+int kernel_smp_wake_idle_other(void);
+int kernel_smp_wake_logical(uint64_t logical);
+void kernel_smp_reschedule_others(void);
+int kernel_smp_wake_boot_cpu(void);
+void kernel_smp_secondary_retire(void);
+void kernel_smp_retire_finalize(void);
+int kernel_smp_shutdown_secondary(void);
+
+int kernel_scheduler_stop_current(uint64_t *frame);
 
 extern void kernel_exception_panic_entry(void);
 extern void kernel_exception_entry(void);
@@ -272,6 +312,10 @@ extern void kernel_page_fault_entry(void);
 extern void kernel_syscall_entry(void);
 extern void kernel_timer_entry(void);
 extern void kernel_device_irq_entry(void);
+extern void kernel_ipi_entry(void);
+extern uint8_t kernel_secondary_trampoline[];
+extern uint8_t kernel_secondary_trampoline_end[];
+extern uint8_t kernel_secondary_table_load[];
 extern void kernel_idle_wait(void);
 extern uint8_t kernel_idle_wait_instruction[];
 extern uint8_t kernel_idle_wait_resume[];
@@ -284,6 +328,8 @@ extern void kernel_suspend_to_user(uintptr_t *resume_sp,
 extern void kernel_switch_continuation(uintptr_t *current_resume_sp,
                                        uintptr_t next_resume_sp);
 extern void kernel_resume_continuation(uintptr_t resume_sp);
+extern void kernel_secondary_restart(uintptr_t stack_top);
+extern void kernel_secondary_retire_entry(void);
 extern void kernel_start_user(uint64_t page_table_root,
                               uint64_t entry,
                               uint64_t stack_pointer,

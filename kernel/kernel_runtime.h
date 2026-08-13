@@ -85,6 +85,7 @@ struct KernelProcess {
     KernelList threads;
     KernelList children;
     KernelProcess *parent;
+    KernelThread *stop_owner;
     KernelFdTable *fd_table;
     KernelUserImage image;
     uint64_t pid;
@@ -106,6 +107,7 @@ struct KernelProcess {
     int faulted;
     int registered;
     int reap_queued;
+    int stop_requested;
 };
 
 struct KernelThread {
@@ -139,6 +141,7 @@ struct KernelThread {
     uintptr_t kernel_resume_sp;
     uint64_t *active_trap_frame;
     int64_t kernel_wait_result;
+    uint64_t cpu_affinity;
     KernelThreadState state;
     int queued;
     int reap_queued;
