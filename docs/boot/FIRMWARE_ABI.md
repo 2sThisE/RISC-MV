@@ -20,7 +20,7 @@ Boot ROM은 GPT/FAT32와 VIO block 장치를 소유한다. 2차 부트로더는 
 |---|---|
 | `PC` | BOOT.EXF physical entry |
 | `R0` | `CvmFirmwareTable` 물리 주소, v1은 `0x6000` |
-| `R1` | `CVM_FIRMWARE_HANDOFF_MAGIC` |
+| `R1` | `CVM_FIRMWARE_HANDOFF_MAGIC` (`0x31304857464D5643` / `"CVMFWH01"`) |
 | `R2` | boot VIO slot |
 | `SP` | 16바이트 정렬 임시 stack |
 | privilege | supervisor |
@@ -53,7 +53,9 @@ Checksum은 offset `0x18`을 0으로 보고 전체 256바이트에 계산한 CRC
 | `0x08` | ABI major/minor |
 | `0x0C` | header size |
 | `0x10` | total size |
+| `0x14` | flags |
 | `0x18` | checksum |
+| `0x1C` | reserved0 |
 | `0x20` | RAM size |
 | `0x28` | CPU feature mask |
 | `0x30` | page size |

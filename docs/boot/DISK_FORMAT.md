@@ -45,8 +45,8 @@ FAT volume label `CVM BOOT`는 레거시 값을 유지한다. 기본 생성은 �
 - backup VBR: 6
 - media descriptor: `0xF8`
 - volume label: `CVM BOOT`
-- 64 MiB급 volume은 1 sector/cluster
-- 큰 v1 volume은 8 sectors/cluster
+- 260 MiB 미만(532,480 sectors 미만) volume은 1 sector/cluster
+- 260 MiB 이상 volume은 8 sectors/cluster
 
 디렉터리 배치는 고정된 8.3 이름을 사용한다.
 

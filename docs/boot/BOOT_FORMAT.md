@@ -113,6 +113,14 @@ BOOT_INFO, INITRD, FIRMWARE, MMIO를 정의한다. 커널은 USABLE만 즉시
 할당하며 BootInfo를 필요한 곳으로 복사한 뒤 BOOTLOADER_RECLAIMABLE을
 회수할 수 있다.
 
+`flags` 비트는 다음 의미를 갖는다:
+- Bit 0: `CVM_BOOTINFO_FLAG_MMU_ENABLED`
+- Bit 1: `CVM_BOOTINFO_FLAG_INITRD_PRESENT`
+- Bit 2: `CVM_BOOTINFO_FLAG_COMMAND_LINE_PRESENT`
+- Bit 3: `CVM_BOOTINFO_FLAG_RANDOM_SEED_VALID`
+- Bit 4: `CVM_BOOTINFO_FLAG_GPT_BOOT`
+- Bit 5: `CVM_BOOTINFO_FLAG_FALLBACK_BOOT`
+
 `CVM_BOOTINFO_FLAG_MMU_ENABLED`가 설정되면 256바이트 고정 헤더 바로 뒤에
 64바이트 `CvmBootVirtualHandoff`가 존재하고 `memory_map_offset`은 이 확장
 뒤를 가리킨다.
@@ -121,7 +129,7 @@ BOOT_INFO, INITRD, FIRMWARE, MMIO를 정의한다. 커널은 USABLE만 즉시
 |---:|---:|---|
 | `0x00` | 8 | magic = `CVMVIRT1` |
 | `0x08` | 8 | kernel virtual base |
-| `0x10` | 8 | kernel virtual span |
+| `0x10` | 8 | kernel_virtual_size |
 | `0x18` | 8 | initial physical PTBR |
 | `0x20` | 8 | physical RAM direct-map virtual base |
 | `0x28` | 8 | direct-map size |

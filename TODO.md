@@ -55,7 +55,7 @@
 - [x] UART, block, keyboard와 display의 최소 kernel driver
 
 현재 scheduler는 동적 `KernelProcess`/`KernelThread`와 intrusive runnable queue로
-3개 process, 4개 thread를 선점 실행한다. user fault는 해당 process에 격리하고
+2개 process, 3개 thread를 선점 실행한다. user fault는 해당 process에 격리하고
 부모 없는 zombie는 안전한 다음 trap에서 수거한다. parent/child와 process
 `wait`/`waitpid`, thread `join`의 `BLOCKED -> RUNNABLE` wakeup은 구현됐다.
 process별 file descriptor와 transactional `exec`도 구현됐으며 일반 wait

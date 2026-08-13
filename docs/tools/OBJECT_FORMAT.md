@@ -37,5 +37,5 @@
 `cvmlink`는 입력 오브젝트의 같은 이름 섹션을 합치고 각 출력 섹션을 4KiB
 경계에 배치한다. 로컬 심볼은 입력 파일 안에서만 보이고 `.global` 정의만 다른
 오브젝트의 `.extern`을 해결한다. 중복 전역, 미해결 심볼, 재배치 overflow,
-실행 섹션이 아닌 entry는 오류다. 결과는 RX/R/RW/RW-BSS의 `RMVEXF01`
+`.text` 섹션에 존재하지 않는 entry는 오류다. 결과는 RX/R/RW/RW-BSS의 `RMVEXF01`
 다중 세그먼트 이미지다.

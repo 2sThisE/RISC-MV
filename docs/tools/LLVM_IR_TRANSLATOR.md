@@ -80,11 +80,12 @@ C 소스에서 오브젝트를 만든다.
     -Startup kernel_start.s -Entry kernel_entry -Base 0x10000
 ```
 
-LLVM IR을 직접 변환하는 저수준 명령은 다음과 같다.
+LLVM IR을 직접 변환하는 저수준 명령은 다음과 같다. `cvmir.exe`는 비-RArchM64 target triple의 IR을 허용하기 위한 `--allow-foreign-triple` 옵션과 도움말 표시를 위한 `-h`/`--help` 옵션을 추가로 지원한다. `cvmclang.ps1`은 추가 인클루드 경로 지정을 위해 `-IncludeDirectory` 파라미터를 지원한다.
 
 ```powershell
-.\build\tools\cvmir.exe -S input.ll -o input.s
+.\build\tools\cvmir.exe -S input.ll -o input.s [--allow-foreign-triple]
 .\build\tools\cvmir.exe -c input.ll -o input.o
+.\build\tools\cvmclang.ps1 input.c -o input.exf -IncludeDirectory .\include
 ```
 
 ## 지원 범위
